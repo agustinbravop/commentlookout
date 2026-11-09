@@ -50,6 +50,23 @@ db.exec(`
     started_at TEXT NOT NULL,
     PRIMARY KEY (user_id, account_id)
   );
+  CREATE TABLE IF NOT EXISTS moderation_preferences (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    confirmed_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, account_id)
+  );
+  CREATE TABLE IF NOT EXISTS moderation_jobs (
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    comment_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, account_id, comment_id),
+    FOREIGN KEY (user_id, account_id, comment_id) REFERENCES synced_comments(user_id, account_id, comment_id) ON DELETE CASCADE
+  );
   CREATE TABLE IF NOT EXISTS monitored_posts (
     user_id TEXT NOT NULL,
     account_id TEXT NOT NULL,
@@ -150,6 +167,9 @@ if (!db.prepare('PRAGMA table_info(users)').all().some((column) => (column as { 
 }
 if (!db.prepare('PRAGMA table_info(comment_assessments)').all().some((column) => (column as { name: string }).name === 'dismissed')) {
   db.exec('ALTER TABLE comment_assessments ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0');
+}
+if (!db.prepare('PRAGMA table_info(moderation_preferences)').all().some((column) => (column as { name: string }).name === 'backfill_confirmed')) {
+  db.exec('ALTER TABLE moderation_preferences ADD COLUMN backfill_confirmed INTEGER NOT NULL DEFAULT 0');
 }
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');

@@ -45,6 +45,10 @@
 .workspace-editor p { color: var(--destructive); font-size: 12px; }
 .workspace-reply-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .workspace-accounts li { flex-wrap: wrap; max-width: 350px; }
+.workspace-moderation { flex-basis: 100%; display: grid; gap: 8px; margin-top: 12px; font-size: 13px; }
+.workspace-moderation input { accent-color: var(--primary); }
+.workspace-moderation p, .workspace-moderation small { color: var(--muted-foreground); }
+.workspace-moderation button { justify-self: start; }
 .workspace-backfill { margin-bottom: 18px; }
 .workspace-accounts .workspace-backfill-status { flex-basis: 100%; margin: 0; color: var(--muted-foreground); font-size: 12px; }
 @media (max-width: 700px) { .workspace-main { padding-top: 20px; }.workspace-nav { margin-bottom: 30px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }.workspace-nav::-webkit-scrollbar { display: none; }.workspace-inbox-head { display: none; }.workspace-comment-list > li { display: block; padding: 20px; }.workspace-comment-list aside { border-left: 0; border-top: 1px solid var(--border); margin-top: 20px; padding: 15px 0 0; }.workspace-comment-list aside p { margin-top: 6px; } }

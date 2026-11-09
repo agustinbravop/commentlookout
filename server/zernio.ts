@@ -175,10 +175,36 @@ zernio.get('/api/zernio', async (c) => {
       cursor = data.pagination?.nextCursor || undefined;
     } while (cursor);
     const voices = db.prepare("SELECT account_id, instructions FROM brand_voices WHERE user_id = ? AND account_id != '*'").all(user.id) as { account_id: string; instructions: string }[];
-    return c.json({ connected: true, accounts, voices: Object.fromEntries(voices.map((voice) => [voice.account_id, voice.instructions])) });
+    const preferences = db.prepare('SELECT account_id, enabled FROM moderation_preferences WHERE user_id = ? AND owner_id = ? AND backfill_confirmed = 1').all(user.id, connected.owner_id) as { account_id: string; enabled: number }[];
+    return c.json({ connected: true, accounts, voices: Object.fromEntries(voices.map((voice) => [voice.account_id, voice.instructions])),
+      moderation: Object.fromEntries(preferences.map((preference) => [preference.account_id, !!preference.enabled])) });
   } catch {
     return c.json({ error: 'Could not read Zernio accounts. Reconnect Zernio if the problem continues.' }, 502);
   }
+});
+
+zernio.put('/api/accounts/:accountId/moderation', async (c) => {
+  const user = getUser(getCookie(c, 'cl_session'));
+  if (!user) return c.json({ error: 'Unauthenticated' }, 401);
+  if (![new URL(c.req.url).origin, appOrigin && new URL(appOrigin).origin].includes(c.req.header('origin'))) return c.json({ error: 'Invalid origin' }, 403);
+  const body = await c.req.json().catch(() => null) as { enabled?: unknown } | null;
+  const accountId = c.req.param('accountId');
+  if (typeof body?.enabled !== 'boolean' || !/^[a-f\d]{24}$/i.test(accountId)) return c.json({ error: 'Invalid setting' }, 400);
+  const connection = db.prepare('SELECT owner_id FROM zernio_connections WHERE user_id = ?').get(user.id) as { owner_id: string } | null;
+  if (!connection) return c.json({ error: 'Connect Zernio first' }, 409);
+  try {
+    const token = await accessToken(user.id);
+    if (!token || await ownerId(token) !== connection.owner_id) throw new Error('Connection changed');
+    const listed = await zernioGet(token, `/accounts?${new URLSearchParams({ search: accountId, platforms: 'instagram,youtube', status: 'connected', limit: '1' })}`) as {
+      accounts?: { _id: string; platform: string; status?: string }[];
+    };
+    if (!listed.accounts?.some((account) => account._id === accountId && ['instagram', 'youtube'].includes(account.platform) && (!account.status || account.status === 'connected'))) return c.json({ error: 'Account not found' }, 404);
+  } catch { return c.json({ error: 'Could not verify Zernio account. No setting was saved.' }, 502); }
+  if (!db.prepare('SELECT 1 FROM zernio_connections WHERE user_id = ? AND owner_id = ?').get(user.id, connection.owner_id)) return c.json({ error: 'Connection changed' }, 409);
+  db.prepare(`INSERT INTO moderation_preferences (user_id, account_id, owner_id, enabled, confirmed_at, backfill_confirmed) VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT(user_id, account_id)
+    DO UPDATE SET owner_id = excluded.owner_id, enabled = excluded.enabled, confirmed_at = excluded.confirmed_at, backfill_confirmed = 1`)
+    .run(user.id, accountId, connection.owner_id, Number(body.enabled), new Date().toISOString());
+  return c.json({ enabled: body.enabled });
 });
 
 zernio.get('/api/zernio/preview', async (c) => {
@@ -300,23 +326,27 @@ zernio.get('/api/comments', (c) => {
        comments.message, comments.author, comments.created_at AS createdAt, comments.is_hidden AS isHidden,
        CASE WHEN historical.comment_id IS NOT NULL THEN 1 ELSE 0 END AS isBackfill,
        CASE WHEN assessment.classified_message = comments.message THEN assessment.category END AS category,
-       CASE WHEN assessment.classified_message = comments.message THEN assessment.reason END AS reason,
-        CASE WHEN owner.comment_id IS NOT NULL THEN 'sent' ELSE sent.status END AS replyStatus
+        CASE WHEN assessment.classified_message = comments.message THEN assessment.reason END AS reason,
+        CASE WHEN assessment.classified_message = comments.message AND assessment.category = 'safe' AND assessment.needs_reply = 1 AND assessment.dismissed = 0 THEN assessment.draft END AS draft,
+        CASE WHEN owner.comment_id IS NOT NULL THEN 'sent' ELSE sent.status END AS replyStatus,
+        moderation.status AS moderationStatus
      FROM synced_comments comments
      JOIN monitored_posts posts ON posts.user_id = comments.user_id AND posts.account_id = comments.account_id AND posts.post_id = comments.post_id
      JOIN monitored_accounts accounts ON accounts.user_id = comments.user_id AND accounts.account_id = comments.account_id
      LEFT JOIN comment_assessments assessment ON assessment.user_id = comments.user_id AND assessment.account_id = comments.account_id AND assessment.comment_id = comments.comment_id
      LEFT JOIN backfill_comments historical ON historical.user_id = comments.user_id AND historical.account_id = comments.account_id AND historical.comment_id = comments.comment_id
      LEFT JOIN comment_replies sent ON sent.user_id = comments.user_id AND sent.account_id = comments.account_id AND sent.comment_id = comments.comment_id
-     LEFT JOIN owner_replies owner ON owner.user_id = comments.user_id AND owner.account_id = comments.account_id AND owner.comment_id = comments.comment_id
+      LEFT JOIN owner_replies owner ON owner.user_id = comments.user_id AND owner.account_id = comments.account_id AND owner.comment_id = comments.comment_id
+      LEFT JOIN moderation_jobs moderation ON moderation.user_id = comments.user_id AND moderation.account_id = comments.account_id AND moderation.comment_id = comments.comment_id
       WHERE comments.user_id = ? AND (? = 'all' OR (? = 'hidden' AND comments.is_hidden = 1)
-        OR (? = 'replies' AND comments.is_hidden = 0 AND sent.comment_id IS NULL AND owner.comment_id IS NULL))
+        OR (? = 'replies' AND comments.is_hidden = 0 AND sent.comment_id IS NULL AND owner.comment_id IS NULL
+          AND assessment.classified_message = comments.message AND assessment.category = 'safe' AND assessment.needs_reply = 1 AND assessment.dismissed = 0))
        AND (comments.created_at, comments.account_id, comments.comment_id) < (?, ?, ?)
      ORDER BY comments.created_at DESC, comments.account_id DESC, comments.comment_id DESC LIMIT 51`)
      .all(user.id, view, view, view, ...(before ?? ['9999-12-31', '', ''])) as {
        accountId: string; platform: string; postId: string; postContent: string | null; id: string;
         parentId: string | null; message: string; author: string; createdAt: string; isHidden: number; isBackfill: number;
-         category: string | null; reason: string | null; replyStatus: string | null;
+         category: string | null; reason: string | null; draft: string | null; replyStatus: string | null; moderationStatus: string | null;
     }[];
   const hasMore = rows.length > 50;
   const page = rows.slice(0, 50);

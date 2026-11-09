@@ -50,7 +50,7 @@ test('manual send confirms only once, isolates workspaces, and blocks existing o
     expect(posts).toBe(1);
     expect(db.prepare('SELECT status, reply_id FROM comment_replies WHERE user_id = ? AND comment_id = ?').get(alice.user.id, 'fresh')).toEqual({ status: 'sent', reply_id: 'sent-id' });
     const list = await (await zernio.request('/api/comments?view=replies', { headers: { Cookie: `cl_session=${alice.token}` } })).json() as { comments: { id: string }[] };
-    expect(list.comments.map((comment) => comment.id)).toEqual(['uncertain']);
+    expect(list.comments.map((comment) => comment.id)).toEqual([]);
   } finally { globalThis.fetch = originalFetch; }
 });
 

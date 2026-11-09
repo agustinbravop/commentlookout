@@ -6,6 +6,7 @@ Bun.env.ZERNIO_TOKEN_KEY = Buffer.alloc(32, 7).toString('base64');
 const { db, createSession } = await import('./db');
 const { zernio } = await import('./zernio');
 const { syncComments } = await import('./sync');
+const { moderateComments, moderation } = await import('./moderate');
 
 function connect(sub: string, owner: string) {
   const session = createSession(sub, `${sub}@example.com`, sub);
@@ -93,6 +94,95 @@ test('saved inbox pages newest-first without duplicates', async () => {
   expect(historical.comments).toHaveLength(50);
   expect((await (await zernio.request(`/api/comments?view=all&before=${encodeURIComponent(first.nextCursor)}`, { headers })).json() as { comments: { id: string; isBackfill: boolean }[] }).comments)
     .toContainEqual(expect.objectContaining({ id: 'comment-50', isBackfill: true }));
+});
+
+test('moderation preferences require confirmation and stay scoped to the verified connected account', async () => {
+  const alice = connect('settings-alice', 'settings-alice-owner');
+  const bob = connect('settings-bob', 'settings-bob-owner');
+  const account = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const other = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/users')) return Response.json({ currentUserId: 'settings-alice-owner', users: [{ _id: 'settings-alice-owner', role: 'owner' }] });
+    if (url.pathname.endsWith('/accounts')) return Response.json({ accounts: [{ _id: account, platform: 'instagram' }] });
+    throw new Error(`Unexpected request ${init?.method}`);
+  }) as typeof fetch;
+  const headers = { Cookie: `cl_session=${alice.token}`, Origin: 'http://localhost', 'Content-Type': 'application/json' };
+  const put = (id: string, body: unknown, requestHeaders = headers) => zernio.request(`/api/accounts/${id}/moderation`, { method: 'PUT', headers: requestHeaders, body: JSON.stringify(body) });
+  try {
+    expect(db.prepare('SELECT COUNT(*) AS n FROM moderation_preferences WHERE user_id = ?').get(alice.user.id)).toEqual({ n: 0 });
+    expect((await put(account, { enabled: true }, { ...headers, Origin: 'https://bad.example' })).status).toBe(403);
+    expect((await put(account, { enabled: 'true' })).status).toBe(400);
+    expect((await put(other, { enabled: true })).status).toBe(404);
+    expect((await put(account, { enabled: true })).status).toBe(200);
+    const connected = await (await zernio.request('/api/zernio', { headers })).json() as { moderation: Record<string, boolean> };
+    expect(connected.moderation).toEqual({ [account]: true });
+    expect(db.prepare('SELECT enabled FROM moderation_preferences WHERE user_id = ?').get(bob.user.id)).toBeNull();
+    expect((await put(account, { enabled: false })).status).toBe(200);
+    expect(db.prepare('SELECT enabled FROM moderation_preferences WHERE user_id = ? AND account_id = ?').get(alice.user.id, account)).toEqual({ enabled: 0 });
+    expect((await put(account, { enabled: true }, { ...headers, Cookie: `cl_session=${bob.token}` })).status).toBe(502);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM moderation_preferences WHERE user_id = ?').get(bob.user.id)).toEqual({ n: 0 });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('moderation queues confirmed clear violations and retries failed hides', async () => {
+  const alice = connect('moderation-alice', 'moderation-owner');
+  const account = 'cccccccccccccccccccccccc';
+  db.prepare('INSERT INTO monitored_accounts VALUES (?, ?, ?, ?)').run(alice.user.id, account, 'instagram', new Date().toISOString());
+  db.prepare('INSERT INTO monitored_posts VALUES (?, ?, ?, ?, 0)').run(alice.user.id, account, 'post', 'Caption');
+  for (const [id, category] of [['bad', 'profanity'], ['uncertain', 'review'], ['normal', 'safe']]) {
+    db.prepare('INSERT INTO synced_comments VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0)').run(alice.user.id, account, 'post', id, id, 'Visitor', new Date().toISOString());
+    db.prepare('INSERT INTO comment_assessments (user_id, account_id, comment_id, classified_message, category) VALUES (?, ?, ?, ?, ?)').run(alice.user.id, account, id, id, category);
+  }
+  db.prepare('INSERT INTO backfill_comments VALUES (?, ?, ?)').run(alice.user.id, account, 'bad');
+  db.prepare('INSERT INTO moderation_preferences (user_id, account_id, owner_id, enabled, confirmed_at, backfill_confirmed) VALUES (?, ?, ?, 1, ?, 0)')
+    .run(alice.user.id, account, 'moderation-owner', new Date().toISOString());
+  const original = globalThis.fetch;
+  let fail = true;
+  let writes = 0;
+  let restores = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/users')) return Response.json({ currentUserId: 'moderation-owner', users: [{ _id: 'moderation-owner', role: 'owner' }] });
+    if (url.pathname.endsWith('/accounts')) return Response.json({ accounts: [{ _id: account, platform: 'instagram' }] });
+    if (init?.method === 'DELETE') {
+      restores++;
+      expect(url.searchParams.get('accountId')).toBe(account);
+      return Response.json({ hidden: false, commentId: 'bad' });
+    }
+    if (init?.method === 'POST') {
+      writes++;
+      expect(url.pathname).toEndWith('/post/bad/hide');
+      return fail ? Response.json({}, { status: 503 }) : Response.json({ hidden: true, commentId: 'bad' });
+    }
+    throw new Error('Unexpected request');
+  }) as typeof fetch;
+  const log = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await moderateComments();
+    expect(writes).toBe(0);
+    db.prepare('UPDATE moderation_preferences SET backfill_confirmed = 1 WHERE user_id = ?').run(alice.user.id);
+    await moderateComments();
+    expect(writes).toBe(1);
+    expect(db.prepare('SELECT status FROM moderation_jobs WHERE user_id = ?').get(alice.user.id)).toEqual({ status: 'pending' });
+    db.prepare('UPDATE moderation_jobs SET next_attempt_at = 0 WHERE user_id = ?').run(alice.user.id);
+    fail = false;
+    await moderateComments();
+    await moderateComments();
+    expect(writes).toBe(2);
+    expect(db.prepare('SELECT is_hidden FROM synced_comments WHERE user_id = ? AND comment_id = ?').get(alice.user.id, 'bad')).toEqual({ is_hidden: 1 });
+    expect(db.prepare('SELECT count(*) AS n FROM moderation_jobs WHERE user_id = ?').get(alice.user.id)).toEqual({ n: 1 });
+    const outsider = createSession('restore-outsider', 'restore@example.com', 'Outsider');
+    const path = `/api/comments/${account}/bad/restore`;
+    expect((await moderation.request(path, { method: 'POST', headers: { Cookie: `cl_session=${outsider.token}`, Origin: 'http://localhost' } })).status).toBe(404);
+    expect((await moderation.request(path, { method: 'POST', headers: { Cookie: `cl_session=${alice.token}`, Origin: 'https://bad.example' } })).status).toBe(403);
+    expect((await moderation.request(path, { method: 'POST', headers: { Cookie: `cl_session=${alice.token}`, Origin: 'http://localhost' } })).status).toBe(200);
+    expect(restores).toBe(1);
+    await moderateComments();
+    expect(writes).toBe(2);
+    expect(db.prepare('SELECT status FROM moderation_jobs WHERE user_id = ?').get(alice.user.id)).toEqual({ status: 'restored' });
+  } finally { globalThis.fetch = original; log.mockRestore(); }
 });
 
 test('automatic backfill accepts zero, one or two posts without selecting older extras', async () => {

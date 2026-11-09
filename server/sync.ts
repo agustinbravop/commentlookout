@@ -104,7 +104,9 @@ async function syncThread(userId: string, owner: string, token: string, account:
         if (createdAt < cutoff()) continue;
         db.prepare(`INSERT INTO synced_comments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(user_id, account_id, comment_id) DO UPDATE SET
-            message = excluded.message, author = excluded.author, is_hidden = excluded.is_hidden`)
+            message = excluded.message, author = excluded.author, is_hidden = CASE WHEN EXISTS (
+              SELECT 1 FROM moderation_jobs j WHERE j.user_id = excluded.user_id AND j.account_id = excluded.account_id
+                AND j.comment_id = excluded.comment_id AND j.status = 'done') THEN 1 ELSE excluded.is_hidden END`)
           .run(userId, account._id, postId, comment.id, parentId, comment.message, comment.from?.name || 'Commenter', createdAt, comment.isHidden ? 1 : 0);
         if (backfill && createdAt <= backfill.selected_at) db.prepare('INSERT OR IGNORE INTO backfill_comments VALUES (?, ?, ?)')
           .run(userId, account._id, comment.id);
@@ -179,7 +181,9 @@ export function archiveOldComments() {
     db.prepare(`INSERT OR IGNORE INTO archived_drafts
       SELECT c.user_id, c.account_id, c.comment_id, a.draft FROM synced_comments c
       JOIN comment_assessments a USING (user_id, account_id, comment_id)
-      WHERE c.created_at < ? AND a.draft IS NOT NULL`).run(cutoff());
+      WHERE c.created_at < ? AND a.draft IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM comment_replies r WHERE r.user_id = c.user_id AND r.account_id = c.account_id AND r.comment_id = c.comment_id AND r.status = 'sent')
+        AND NOT EXISTS (SELECT 1 FROM owner_replies r WHERE r.user_id = c.user_id AND r.account_id = c.account_id AND r.comment_id = c.comment_id)`).run(cutoff());
     db.prepare('DELETE FROM synced_comments WHERE created_at < ?').run(cutoff());
   })();
 }

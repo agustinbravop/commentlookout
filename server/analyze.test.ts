@@ -55,6 +55,7 @@ test('only safe comments get drafts; jobs retry, isolate workspaces and preserve
     const inbox = await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: { id: string }[] };
     expect(inbox.comments.map((comment) => comment.id)).toContain('question');
     expect(db.prepare('SELECT draft FROM comment_assessments WHERE user_id = ? AND comment_id = ?').get(alice.user.id, 'question')).toEqual({ draft: 'Happy to help!' });
+    expect(inbox.comments[0]).toMatchObject({ id: 'question', draft: 'Happy to help!' });
     expect((await (await zernio.request('/api/comments?view=all', { headers })).json() as { comments: { id: string }[] }).comments.map((comment) => comment.id)).toContain('question');
     expect((await (await zernio.request('/api/comments?view=hidden', { headers })).json() as { comments: unknown[] }).comments).toEqual([]);
     const saved = await zernio.request(`/api/comments/${account}/question/draft`, { method: 'PUT', headers,
@@ -63,7 +64,7 @@ test('only safe comments get drafts; jobs retry, isolate workspaces and preserve
     expect((await zernio.request(`/api/comments/${account}/link/draft`, { method: 'PUT', headers,
       body: JSON.stringify({ draft: 'Wrong account' }) })).status).toBe(404);
     db.prepare('UPDATE synced_comments SET message = ? WHERE user_id = ? AND comment_id = ?').run('Can you help now?', alice.user.id, 'question');
-    expect((await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: { id: string }[] }).comments.map((comment) => comment.id)).toContain('question');
+    expect((await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: { id: string }[] }).comments.map((comment) => comment.id)).not.toContain('question');
     await analyzeComments();
     expect(db.prepare('SELECT draft FROM comment_assessments WHERE user_id = ? AND comment_id = ?').get(alice.user.id, 'question')).toEqual({ draft: 'My own answer' });
     db.prepare('UPDATE synced_comments SET is_hidden = 1 WHERE user_id = ? AND comment_id = ?').run(bob.user.id, 'link');
@@ -81,8 +82,43 @@ test('only safe comments get drafts; jobs retry, isolate workspaces and preserve
       VALUES (?, ?, ?, ?, 'safe', 1, ?)`).run(alice.user.id, account, 'new-question', 'What next?', 'A draft');
     expect((await zernio.request(`/api/drafts/${account}/new-question`, { method: 'DELETE', headers })).status).toBe(200);
     await analyzeComments();
-    expect((await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: { id: string }[] }).comments.map((comment) => comment.id)).toContain('new-question');
+    expect((await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: { id: string }[] }).comments.map((comment) => comment.id)).not.toContain('new-question');
   } finally { globalThis.fetch = originalFetch; }
 });
 
 type Archived = { draft: string };
+
+test('classifies without drafting neutral, unsafe, hidden or already answered comments', async () => {
+  const { user } = createSession('analysis-cases', 'cases@example.com', 'Cases');
+  const account = '999999999999999999999999';
+  db.prepare('INSERT INTO zernio_connections VALUES (?, ?, ?, ?, ?)').run(user.id, 'cases-owner', 'token', 'token', 9999999999);
+  db.prepare('INSERT INTO monitored_accounts VALUES (?, ?, ?, ?)').run(user.id, account, 'instagram', new Date().toISOString());
+  db.prepare('INSERT INTO monitored_posts VALUES (?, ?, ?, ?, 0)').run(user.id, account, 'post', 'Caption');
+  for (const id of ['neutral', 'spam', 'hidden', 'answered', 'question']) {
+    db.prepare('INSERT INTO synced_comments VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)')
+      .run(user.id, account, 'post', id, id, 'Visitor', new Date().toISOString(), Number(id === 'hidden'));
+  }
+  db.prepare('INSERT INTO owner_replies VALUES (?, ?, ?)').run(user.id, account, 'answered');
+  const original = globalThis.fetch;
+  const drafts: string[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const data = JSON.parse(JSON.parse(String(init?.body)).input) as { comment: string; brand_voice?: string };
+    const draft = 'brand_voice' in data;
+    if (draft) drafts.push(data.comment);
+    const result = draft ? { draft: 'Thanks for asking!' } : { spam: data.comment === 'spam', scam: false, profanity: false, suspicious_link: false,
+      question: !['spam', 'neutral'].includes(data.comment), mentions_account: false, enthusiastic: false, uncertain: false, reason: 'Checked' };
+    return Response.json({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify(result) }] }] });
+  }) as typeof fetch;
+  try {
+    await analyzeComments();
+    expect(drafts).toEqual(['question']);
+    const rows = db.prepare('SELECT comment_id, category, needs_reply, draft FROM comment_assessments WHERE user_id = ? ORDER BY comment_id').all(user.id);
+    expect(rows).toEqual([
+      { comment_id: 'answered', category: 'safe', needs_reply: 1, draft: null },
+      { comment_id: 'hidden', category: 'safe', needs_reply: 1, draft: null },
+      { comment_id: 'neutral', category: 'safe', needs_reply: 0, draft: null },
+      { comment_id: 'question', category: 'safe', needs_reply: 1, draft: 'Thanks for asking!' },
+      { comment_id: 'spam', category: 'spam', needs_reply: 0, draft: null },
+    ]);
+  } finally { globalThis.fetch = original; }
+});

@@ -19,7 +19,7 @@ Agreed during the product discussion on 9 November 2026. The interview is finish
 - Monitor comments on future Instagram and YouTube posts whether published via Zernio or directly on the platform, including replies in comment threads; skip comments by the connected account itself. Zernio's discovery of platform-native posts and YouTube comment delivery may be delayed.
 - Prefer Zernio webhooks; use light polling for platform gaps, account discovery (approximately every 10 minutes), and recovery. Persist and deduplicate incoming work before processing.
 - New-post monitoring begins automatically. The per-social-account **automatic hide/reject toggle defaults on**, but automatic actions cannot begin until the user sees the setting and confirms onboarding.
-- Automatically scan **every comment and reply** on up to the three most recent posts **per social account**; accounts with zero, one, or two posts are fine. No separate approval is required. Run it paginated in the background with visible progress and an expected-volume/cost warning; there is no silent comment cap. Backfill is **review-only**: never automatically hide or reject historical comments.
+- Automatically scan **every comment and reply** on up to the three most recent posts **per social account**; accounts with zero, one, or two posts are fine. No separate approval is required for scanning. Run it paginated in the background with visible progress and an expected-volume/cost warning; there is no silent comment cap. After explicit onboarding confirmation, clear violations in this backfill may be automatically hidden or rejected; uncertain cases remain review-only.
 
 ## Decisions and actions
 
@@ -42,8 +42,10 @@ Agreed during the product discussion on 9 November 2026. The interview is finish
 - Verify Google OAuth redirect and team ownership before enabling automatic actions. Do not claim native-post or YouTube delivery is instantaneous.
 - Current integration restricts Zernio connection to the team owner because the available `/v1/users` response exposes an owner ID, not a stable team ID. Revisit if Zernio exposes team identity or team ownership changes; do not enable automatic actions on a stale ownership check.
 
-## Temporary Zernio reply test
+## Current implementation
 
-- AI analysis and draft scheduling are paused; previously saved assessments and drafts remain in SQLite but are not shown in this test UI. No automatic moderation or reply actions are enabled.
-- All comments includes every saved comment, including unreviewed and historical ones. Hidden comments shows currently hidden comments and an existing assessment reason when available. Needs a reply shows visible comments without a recorded owner or app reply; it cannot reliably identify questions while AI is paused.
-- Users can type a reply and explicitly click Send reply. Recheck the thread first, persist the attempt before posting, and never resend automatically after ambiguous delivery. Live delegated reply permission and platform behavior still need a user-triggered test.
+- AI classifies saved comments first and drafts only safe reply candidates without a recorded owner or app reply. Neutral comments need neither action. Confirmed Instagram accounts automatically hide clear spam, scams and profanity; YouTube automatic moderation is not enabled. Replies are never automatic.
+- Each connected account shows a default-on automatic moderation choice that must be explicitly confirmed, and can later be changed. The saved preference is tied to the verified Zernio owner. Backfill requires renewed confirmation that explicitly includes the three scanned posts; Instagram hiding has been verified live.
+- Hidden Instagram comments can be restored manually; a restored comment is not automatically hidden again. The restore endpoint still needs a live permission test.
+- All comments includes every saved comment, including unreviewed and historical ones, and displays AI review flags. Hidden comments shows currently hidden comments and an assessment reason when available. Needs a reply shows AI-selected visible comments without a recorded reply.
+- Users can edit a draft or type a reply and explicitly click Send reply. Recheck the thread first, persist the attempt before posting, and never resend automatically after ambiguous delivery. The user confirmed a live reply works; other platforms and moderation permissions still need verification.
