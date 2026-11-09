@@ -142,9 +142,14 @@ export function Workspace() {
       }
       if (!response.ok) throw new Error('Unable to load session');
       setUser(await response.json() as User);
-      const accounts = await fetch('/api/zernio');
-      if (!accounts.ok) throw new Error((await accounts.json() as { error?: string }).error || 'Could not read Zernio accounts');
-      setConnection(await accounts.json() as Connection);
+      try {
+        const accounts = await fetch('/api/zernio');
+        if (!accounts.ok) throw new Error();
+        setConnection(await accounts.json() as Connection);
+      } catch {
+        setConnection({ connected: false, accounts: [] });
+        setConnectionError('Could not load your Zernio connection. Try again or reconnect Zernio.');
+      }
     }).catch(() => setError(true));
   }, []);
 
