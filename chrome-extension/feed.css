@@ -1,0 +1,41 @@
+:host { display: inline-flex; align-items: center; font-family: inherit; color: #1a1a1a; }
+* { box-sizing: border-box; }
+button { font: inherit; cursor: pointer; }
+button:focus-visible { outline: 2px solid #a17600; outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.launch { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 11px; border: 1px solid #e1b52f; border-radius: 4px; background: #f9dc67; color: #1a1a1a; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.launch:hover, .launch[aria-expanded="true"] { background: #f2cb44; }
+.launch span { font-size: 16px; line-height: 1; }
+.panel { position: fixed; z-index: 2147483000; top: 72px; right: 18px; width: min(396px, calc(100vw - 24px)); max-height: calc(100vh - 84px); overflow: auto; border: 1px solid #dedede; border-radius: 6px; background: #fff; box-shadow: 0 12px 40px #00000024; text-align: left; }
+.top { display: flex; justify-content: space-between; align-items: center; padding: 13px 16px; border-bottom: 1px solid #e8e8e8; }
+.top h2 { margin: 0; font-size: 16px; font-weight: 650; line-height: 1.3; }
+.close { width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; color: #555; font-size: 23px; line-height: 1; }
+.close:hover { background: #f2f2f2; color: #1a1a1a; }
+.account { display: flex; align-items: center; gap: 10px; padding: 14px 16px 12px; }
+.account > span { min-width: 0; }
+.account strong, .account small { display: block; }.account strong { font-size: 13px; font-weight: 600; }.account small { margin-top: 2px; color: #606060; font-size: 11px; }
+.pick { flex-shrink: 0; margin-left: auto; padding: 7px 10px; border: 1px solid #e1b52f; border-radius: 4px; background: #f9dc67; color: #1a1a1a; font-size: 11px; font-weight: 600; }.pick:hover { background: #f2cb44; }
+#feed-images { display: none; }
+.grid-heading { margin: 0; padding: 0 16px 8px; color: #606060; font-size: 11px; }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; padding: 0 16px; }
+.grid > div { min-width: 0; aspect-ratio: 1; }
+.tile { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; overflow: hidden; padding: 10px; border: 0; color: #fff; text-align: left; }
+.tile:hover { filter: brightness(1.07); }.tile.selected { box-shadow: inset 0 0 0 4px #f9dc67; }.tile:focus-visible { outline-offset: 1px; }
+.tile-no { position: absolute; z-index: 1; top: 9px; right: 9px; font-size: 10px; font-weight: 700; text-shadow: 0 1px 4px #0009; }
+.tile-title { z-index: 1; max-width: 100%; margin-top: auto; font-size: 13px; font-weight: 650; line-height: 1.15; overflow-wrap: anywhere; text-shadow: 0 1px 4px #0007; }
+.tile.photo { background: #eee; }.tile.photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.slot { display: grid; place-items: center; background: #f4f4f4; color: #999; font-size: 24px; }
+.tile-shape { position: absolute; pointer-events: none; }
+.morning { background: linear-gradient(155deg, #eecdaa 1%, #c27d60 75%); }.morning .tile-shape { width: 95px; height: 95px; border: 17px solid #f2dec5; border-radius: 50%; top: 25%; right: -24%; box-shadow: -15px 12px 0 #ab684f; }
+.studio { background: #394d4a; }.studio .tile-shape { width: 74%; height: 55%; background: linear-gradient(130deg, #d4c8ad 50%, #999579 51%); top: 16%; left: 25%; transform: rotate(-17deg); box-shadow: -14px 20px 0 #a2a88e; }
+.coast { background: linear-gradient(175deg, #cfb99e 0 47%, #7b9e9a 48% 67%, #446d77 68%); }.coast .tile-shape { width: 51px; height: 51px; top: 16%; right: 14%; border-radius: 50%; background: #f2dcc0; }
+.objects { background: #b89079; }.objects .tile-shape { width: 65%; height: 72%; top: 9%; left: 23%; border-radius: 8% 12% 42% 40%; background: linear-gradient(85deg,#6e6250,#d8c3a7 54%,#9a8068); box-shadow: 13px 11px 0 #7f6557; }
+.pause { background: #f0e7d4; color: #603e32; }.pause .tile-shape { width: 60%; height: 1px; top: 35%; left: 10%; background: #af604a; transform: rotate(-30deg); box-shadow: 10px 19px 0 #af604a,20px 38px 0 #af604a; }
+.garden { background: linear-gradient(145deg,#66775d,#a0a66f); }.garden .tile-shape { width: 80%; height: 90%; top: -15%; right: -18%; border-radius: 0 100% 0 100%; background: #c5c38d; transform: rotate(35deg); box-shadow: -36px 31px 0 #3e604b; }
+.shape { background: #c96d4f; }.shape .tile-shape { width: 70%; height: 70%; top: 14%; left: 27%; border-radius: 50% 50% 0 0; background: #e7b892; box-shadow: -23px 31px 0 #7d4c3e; }
+.table { background: #74766a; }.table .tile-shape { width: 83px; height: 83px; left: 28%; top: 14%; border: 12px solid #d9c8ae; border-radius: 50%; background: #9f6e53; box-shadow: -13px 10px 0 #3d5149; }
+.evening { background: linear-gradient(170deg,#ad765d 0 48%,#494950 49%); }.evening .tile-shape { width: 70px; height: 70px; top: 15%; left: 19%; border-radius: 50%; background: #e8be8c; }
+.detail { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px 16px; border-bottom: 1px solid #e8e8e8; }.detail-index { flex-shrink: 0; color: #666; font-size: 11px; }.detail-copy { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.move-controls { display: flex; gap: 5px; }.move-controls button { width: 30px; height: 30px; border: 1px solid #dedede; border-radius: 4px; background: #fff; color: #1a1a1a; font-size: 16px; }.move-controls button:hover:not(:disabled) { background: #f9dc67; }.move-controls button:disabled { color: #aaa; cursor: not-allowed; }
+footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 11px 16px 13px; color: #606060; font-size: 11px; line-height: 1.4; }.message { display: block; margin-top: 4px; color: #9a391f; }.footer-actions { display: flex; gap: 6px; }.reset, .sample-reset { flex-shrink: 0; padding: 6px 8px; border: 1px solid #dedede; border-radius: 4px; background: #fff; color: #1a1a1a; font-size: 11px; }.reset:hover, .sample-reset:hover { background: #f5f5f5; }
+@media (max-width: 600px) { .panel { top: 50px; right: 12px; max-height: calc(100vh - 62px); } }

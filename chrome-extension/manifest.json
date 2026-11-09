@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Feed Study for Zernio",
+  "version": "0.1.0",
+  "description": "A read-only Instagram-style feed planning preview on Zernio's Posts page.",
+  "icons": {
+    "16": "icons/zernio-16.png",
+    "48": "icons/zernio-48.png",
+    "128": "icons/zernio-128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://zernio.com/dashboard/posts-all*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["feed.css"], "matches": ["https://zernio.com/*"] }
+  ]
+}
