@@ -41,3 +41,9 @@ Agreed during the product discussion on 9 November 2026. The interview is finish
 - Live-test that delegated Zernio OAuth can discover accounts and posts, read comments/replies, configure webhooks, hide/reject and restore comments, and send replies. Document any platform or OAuth gaps; fall back to server-side polling if OAuth cannot configure webhooks.
 - Verify Google OAuth redirect and team ownership before enabling automatic actions. Do not claim native-post or YouTube delivery is instantaneous.
 - Current integration restricts Zernio connection to the team owner because the available `/v1/users` response exposes an owner ID, not a stable team ID. Revisit if Zernio exposes team identity or team ownership changes; do not enable automatic actions on a stale ownership check.
+
+## Temporary Zernio reply test
+
+- AI analysis and draft scheduling are paused; previously saved assessments and drafts remain in SQLite but are not shown in this test UI. No automatic moderation or reply actions are enabled.
+- All comments includes every saved comment, including unreviewed and historical ones. Hidden comments shows currently hidden comments and an existing assessment reason when available. Needs a reply shows visible comments without a recorded owner or app reply; it cannot reliably identify questions while AI is paused.
+- Users can type a reply and explicitly click Send reply. Recheck the thread first, persist the attempt before posting, and never resend automatically after ambiguous delivery. Live delegated reply permission and platform behavior still need a user-triggered test.

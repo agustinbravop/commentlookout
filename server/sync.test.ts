@@ -76,6 +76,8 @@ test('saved inbox pages newest-first without duplicates', async () => {
   db.prepare('INSERT INTO monitored_posts VALUES (?, ?, ?, ?, 0)').run(user.id, account, 'post', 'Caption');
   const insert = db.prepare('INSERT INTO synced_comments VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0)');
   for (let i = 0; i < 52; i++) insert.run(user.id, account, 'post', `comment-${i}`, `Message ${i}`, 'Visitor', new Date(Date.now() - i * 1000).toISOString());
+  db.prepare('UPDATE synced_comments SET is_hidden = 1 WHERE user_id = ? AND comment_id = ?').run(user.id, 'comment-51');
+  db.prepare('INSERT INTO backfill_comments VALUES (?, ?, ?)').run(user.id, account, 'comment-50');
   const headers = { Cookie: `cl_session=${token}` };
   const first = await (await zernio.request('/api/comments', { headers })).json() as { comments: { id: string }[]; nextCursor: string };
   expect(first.comments).toHaveLength(50);
@@ -84,6 +86,13 @@ test('saved inbox pages newest-first without duplicates', async () => {
   expect(second.comments).toHaveLength(2);
   expect(second.nextCursor).toBeNull();
   expect(new Set([...first.comments, ...second.comments].map(({ id }) => id)).size).toBe(52);
+  expect(second.comments.map(({ id }) => id)).toEqual(['comment-50', 'comment-51']);
+  const hidden = await (await zernio.request('/api/comments?view=hidden', { headers })).json() as { comments: { id: string; isHidden: boolean }[] };
+  expect(hidden.comments).toEqual([expect.objectContaining({ id: 'comment-51', isHidden: true })]);
+  const historical = await (await zernio.request('/api/comments?view=all', { headers })).json() as { comments: { id: string; isBackfill: boolean }[] };
+  expect(historical.comments).toHaveLength(50);
+  expect((await (await zernio.request(`/api/comments?view=all&before=${encodeURIComponent(first.nextCursor)}`, { headers })).json() as { comments: { id: string; isBackfill: boolean }[] }).comments)
+    .toContainEqual(expect.objectContaining({ id: 'comment-50', isBackfill: true }));
 });
 
 test('automatic backfill accepts zero, one or two posts without selecting older extras', async () => {

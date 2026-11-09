@@ -284,7 +284,7 @@ zernio.get('/api/comments', (c) => {
   const user = getUser(getCookie(c, 'cl_session'));
   if (!user) return c.json({ error: 'Unauthenticated' }, 401);
   const view = c.req.query('view') || 'all';
-  if (!['all', 'review', 'replies'].includes(view)) return c.json({ error: 'Invalid view' }, 400);
+  if (!['all', 'hidden', 'replies'].includes(view)) return c.json({ error: 'Invalid view' }, 400);
   let before: [string, string, string] | undefined;
   if (c.req.query('before')) {
     try {
@@ -301,20 +301,22 @@ zernio.get('/api/comments', (c) => {
        CASE WHEN historical.comment_id IS NOT NULL THEN 1 ELSE 0 END AS isBackfill,
        CASE WHEN assessment.classified_message = comments.message THEN assessment.category END AS category,
        CASE WHEN assessment.classified_message = comments.message THEN assessment.reason END AS reason,
-       CASE WHEN assessment.classified_message = comments.message AND assessment.needs_reply = 1 AND assessment.category = 'safe' AND assessment.dismissed = 0 THEN assessment.draft END AS draft
+        CASE WHEN owner.comment_id IS NOT NULL THEN 'sent' ELSE sent.status END AS replyStatus
      FROM synced_comments comments
      JOIN monitored_posts posts ON posts.user_id = comments.user_id AND posts.account_id = comments.account_id AND posts.post_id = comments.post_id
      JOIN monitored_accounts accounts ON accounts.user_id = comments.user_id AND accounts.account_id = comments.account_id
      LEFT JOIN comment_assessments assessment ON assessment.user_id = comments.user_id AND assessment.account_id = comments.account_id AND assessment.comment_id = comments.comment_id
      LEFT JOIN backfill_comments historical ON historical.user_id = comments.user_id AND historical.account_id = comments.account_id AND historical.comment_id = comments.comment_id
-     WHERE comments.user_id = ? AND (? = 'all' OR (? = 'review' AND assessment.classified_message = comments.message AND assessment.category NOT IN ('safe'))
-       OR (? = 'replies' AND assessment.classified_message = comments.message AND assessment.category = 'safe' AND assessment.needs_reply = 1 AND assessment.dismissed = 0))
+     LEFT JOIN comment_replies sent ON sent.user_id = comments.user_id AND sent.account_id = comments.account_id AND sent.comment_id = comments.comment_id
+     LEFT JOIN owner_replies owner ON owner.user_id = comments.user_id AND owner.account_id = comments.account_id AND owner.comment_id = comments.comment_id
+      WHERE comments.user_id = ? AND (? = 'all' OR (? = 'hidden' AND comments.is_hidden = 1)
+        OR (? = 'replies' AND comments.is_hidden = 0 AND sent.comment_id IS NULL AND owner.comment_id IS NULL))
        AND (comments.created_at, comments.account_id, comments.comment_id) < (?, ?, ?)
      ORDER BY comments.created_at DESC, comments.account_id DESC, comments.comment_id DESC LIMIT 51`)
      .all(user.id, view, view, view, ...(before ?? ['9999-12-31', '', ''])) as {
        accountId: string; platform: string; postId: string; postContent: string | null; id: string;
         parentId: string | null; message: string; author: string; createdAt: string; isHidden: number; isBackfill: number;
-       category: string | null; reason: string | null; draft: string | null;
+         category: string | null; reason: string | null; replyStatus: string | null;
     }[];
   const hasMore = rows.length > 50;
   const page = rows.slice(0, 50);

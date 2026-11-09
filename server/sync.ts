@@ -92,7 +92,13 @@ async function syncThread(userId: string, owner: string, token: string, account:
     db.transaction(() => {
       if (!connected(userId, owner)) return;
       for (const { comment, parentId } of comments) {
-        if (comment.from?.isOwner || !comment.id || typeof comment.message !== 'string' ||
+        if (comment.from?.isOwner) {
+          if (parentId) db.prepare(`INSERT OR IGNORE INTO owner_replies
+            SELECT user_id, account_id, comment_id FROM synced_comments WHERE user_id = ? AND account_id = ? AND comment_id = ?`)
+            .run(userId, account._id, parentId);
+          continue;
+        }
+        if (!comment.id || typeof comment.message !== 'string' ||
             !Number.isFinite(Date.parse(comment.createdTime))) continue;
         const createdAt = new Date(comment.createdTime).toISOString();
         if (createdAt < cutoff()) continue;

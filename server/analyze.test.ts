@@ -52,20 +52,22 @@ test('only safe comments get drafts; jobs retry, isolate workspaces and preserve
     await analyzeComments();
     expect(draftCalls).toBe(1);
     const headers = aliceHeaders;
-    const inbox = await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: { draft: string }[] };
-    expect(inbox.comments[0].draft).toBe('Happy to help!');
+    const inbox = await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: { id: string }[] };
+    expect(inbox.comments.map((comment) => comment.id)).toContain('question');
+    expect(db.prepare('SELECT draft FROM comment_assessments WHERE user_id = ? AND comment_id = ?').get(alice.user.id, 'question')).toEqual({ draft: 'Happy to help!' });
     expect((await (await zernio.request('/api/comments?view=all', { headers })).json() as { comments: { id: string }[] }).comments.map((comment) => comment.id)).toContain('question');
-    expect((await (await zernio.request('/api/comments?view=review', { headers })).json() as { comments: unknown[] }).comments).toEqual([]);
+    expect((await (await zernio.request('/api/comments?view=hidden', { headers })).json() as { comments: unknown[] }).comments).toEqual([]);
     const saved = await zernio.request(`/api/comments/${account}/question/draft`, { method: 'PUT', headers,
       body: JSON.stringify({ draft: 'My own answer' }) });
     expect(saved.status).toBe(200);
     expect((await zernio.request(`/api/comments/${account}/link/draft`, { method: 'PUT', headers,
       body: JSON.stringify({ draft: 'Wrong account' }) })).status).toBe(404);
     db.prepare('UPDATE synced_comments SET message = ? WHERE user_id = ? AND comment_id = ?').run('Can you help now?', alice.user.id, 'question');
-    expect((await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: unknown[] }).comments).toEqual([]);
+    expect((await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: { id: string }[] }).comments.map((comment) => comment.id)).toContain('question');
     await analyzeComments();
-    expect((await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: { draft: string }[] }).comments[0].draft).toBe('My own answer');
-    expect((await (await zernio.request('/api/comments?view=review', { headers: { Cookie: `cl_session=${bob.token}` } })).json() as { comments: { id: string }[] }).comments[0].id).toBe('link');
+    expect(db.prepare('SELECT draft FROM comment_assessments WHERE user_id = ? AND comment_id = ?').get(alice.user.id, 'question')).toEqual({ draft: 'My own answer' });
+    db.prepare('UPDATE synced_comments SET is_hidden = 1 WHERE user_id = ? AND comment_id = ?').run(bob.user.id, 'link');
+    expect((await (await zernio.request('/api/comments?view=hidden', { headers: { Cookie: `cl_session=${bob.token}` } })).json() as { comments: { id: string; category: string }[] }).comments[0]).toMatchObject({ id: 'link', category: 'suspicious_link' });
     db.prepare('UPDATE synced_comments SET created_at = ? WHERE user_id = ? AND comment_id = ?').run('2020-01-01T00:00:00Z', alice.user.id, 'question');
     archiveOldComments();
     expect((await (await zernio.request('/api/archived-drafts', { headers })).json() as { drafts: Archived[] }).drafts[0].draft).toBe('My own answer');
@@ -79,7 +81,7 @@ test('only safe comments get drafts; jobs retry, isolate workspaces and preserve
       VALUES (?, ?, ?, ?, 'safe', 1, ?)`).run(alice.user.id, account, 'new-question', 'What next?', 'A draft');
     expect((await zernio.request(`/api/drafts/${account}/new-question`, { method: 'DELETE', headers })).status).toBe(200);
     await analyzeComments();
-    expect((await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: unknown[] }).comments).toEqual([]);
+    expect((await (await zernio.request('/api/comments?view=replies', { headers })).json() as { comments: { id: string }[] }).comments.map((comment) => comment.id)).toContain('new-question');
   } finally { globalThis.fetch = originalFetch; }
 });
 

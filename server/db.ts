@@ -125,6 +125,24 @@ db.exec(`
     draft TEXT NOT NULL,
     PRIMARY KEY (user_id, account_id, comment_id)
   );
+  CREATE TABLE IF NOT EXISTS comment_replies (
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    comment_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'unknown')),
+    reply_id TEXT,
+    PRIMARY KEY (user_id, account_id, comment_id),
+    FOREIGN KEY (user_id, account_id, comment_id) REFERENCES synced_comments(user_id, account_id, comment_id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS owner_replies (
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    comment_id TEXT NOT NULL,
+    PRIMARY KEY (user_id, account_id, comment_id),
+    FOREIGN KEY (user_id, account_id, comment_id) REFERENCES synced_comments(user_id, account_id, comment_id) ON DELETE CASCADE
+  );
 `);
 db.exec("DELETE FROM brand_voices WHERE account_id = '*'");
 if (!db.prepare('PRAGMA table_info(users)').all().some((column) => (column as { name: string }).name === 'picture')) {
