@@ -15,7 +15,7 @@ app.route('/', zernio);
 app.route('/', replies);
 app.route('/', moderation);
 app.all('/api/*', (c) => c.notFound());
-app.get('/app', (c) => c.redirect('/home', 302));
+app.get('/home', (c) => c.redirect(`/app${new URL(c.req.url).search}`, 302));
 app.use('/*', serveStatic({ root: './dist' }));
 app.get('*', serveStatic({ path: './dist/index.html' }));
 

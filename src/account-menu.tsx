@@ -12,7 +12,7 @@ export function AccountMenu({ user }: { user: SignedInUser }) {
         <Avatar size="lg"><AvatarImage src={user.picture || undefined} alt="" referrerPolicy="no-referrer" /><AvatarFallback>{user.name.trim().charAt(0).toUpperCase() || '?'}</AvatarFallback></Avatar>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-40"><DropdownMenuGroup>
-        <DropdownMenuItem render={<a href="/home" />}>Your workspace</DropdownMenuItem>
+        <DropdownMenuItem render={<a href="/app" />}>Your workspace</DropdownMenuItem>
         <DropdownMenuItem nativeButton render={<button type="submit" form="account-sign-out" />}>Sign out</DropdownMenuItem>
       </DropdownMenuGroup></DropdownMenuContent>
     </DropdownMenu>

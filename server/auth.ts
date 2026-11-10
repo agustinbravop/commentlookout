@@ -25,10 +25,10 @@ auth.use('*', async (c, next) => {
 });
 
 auth.get('/api/auth/start', (c) => getUser(getCookie(c, 'cl_session'))
-  ? c.redirect(appOrigin ? `${new URL(appOrigin).origin}/home` : '/home')
+  ? c.redirect(appOrigin ? `${new URL(appOrigin).origin}/app` : '/app')
   : c.redirect('/api/auth/google'));
 
-auth.get('/api/auth/home', (c) => c.redirect(getUser(getCookie(c, 'cl_session')) ? '/home' : '/'));
+auth.get('/api/auth/home', (c) => c.redirect(getUser(getCookie(c, 'cl_session')) ? '/app' : '/'));
 
 auth.get('/api/auth/google', async (c) => {
   if (!clientId || !clientSecret || !redirectUri) return c.text('Google sign-in is not configured', 503);
@@ -63,7 +63,7 @@ auth.get('/api/auth/google/callback', async (c) => {
     const { token } = createSession(claims.sub, claims.email, typeof claims.name === 'string' ? claims.name : claims.email,
       typeof claims.picture === 'string' && /^https:\/\//i.test(claims.picture) ? claims.picture : null);
     setCookie(c, 'cl_session', token, { ...cookieOptions, maxAge: 60 * 60 * 24 * 7 });
-    return c.redirect(appOrigin ? `${new URL(appOrigin).origin}/home` : '/home');
+    return c.redirect(appOrigin ? `${new URL(appOrigin).origin}/app` : '/app');
   } catch {
     return c.text('Google sign-in failed; try again', 400);
   }
