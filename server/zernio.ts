@@ -97,6 +97,8 @@ zernio.use('*', async (c, next) => { await next(); c.header('Cache-Control', 'no
 zernio.get('/api/zernio/connect', async (c) => {
   const user = getUser(getCookie(c, 'cl_session'));
   if (!user) return c.redirect('/api/auth/google');
+  const webhooks = c.req.queries('webhooks');
+  if (webhooks && (webhooks.length !== 1 || webhooks[0] !== '1')) return c.text('Invalid webhook permission request', 400);
   if (!redirectUri || !key) return c.text('Zernio connection is not configured', 503);
   try {
     const state = oauth.randomState();
@@ -104,7 +106,7 @@ zernio.get('/api/zernio/connect', async (c) => {
     const challenge = await oauth.calculatePKCECodeChallenge(verifier);
     const url = new URL('https://zernio.com/oauth/authorize');
     url.search = new URLSearchParams({ response_type: 'code', client_id: await clientId(), redirect_uri: redirectUri,
-      scope: 'accounts:read posts:read messaging:write', state, code_challenge: challenge, code_challenge_method: 'S256' }).toString();
+      scope: 'accounts:read posts:read messaging:write' + (webhooks ? ' automations:write' : ''), state, code_challenge: challenge, code_challenge_method: 'S256' }).toString();
     db.prepare('DELETE FROM zernio_attempts WHERE expires_at < ?').run(now());
     db.prepare('INSERT INTO zernio_attempts VALUES (?, ?, ?, ?)').run(Bun.CryptoHasher.hash('sha256', state, 'hex'), user.id, verifier, now() + 600);
     setCookie(c, 'cl_zernio_oauth', state, { ...cookieOptions, maxAge: 600 });
