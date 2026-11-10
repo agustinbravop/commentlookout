@@ -8,7 +8,7 @@ type Comment = {
   id: string; message: string; createdTime: string; from?: { name?: string; isOwner?: boolean };
   isHidden?: boolean; replyCount?: number; replies?: Comment[];
 };
-const cutoff = () => new Date(Date.now() - 90 * 86400_000).toISOString();
+const cutoff = () => new Date(Date.now() - 365 * 86400_000).toISOString();
 function pictureUrl(value: unknown) {
   if (typeof value !== 'string' || value.length > 4096) return null;
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && url.hostname.includes('.') && !url.hostname.endsWith('.local') && !/^[\d.]+$/.test(url.hostname) ? url.href : null; }

@@ -332,7 +332,7 @@ export function Workspace() {
               {activeTab === 'settings' && <TabsContent value="settings">
                 <div className="workspace-heading"><h1>Settings</h1></div>
                 {user && connection ? <Card id="accounts" className="workspace-next">
-                <CardHeader><CardTitle><h2>{connection.connected ? 'Your accounts' : 'Connect Zernio'}</h2></CardTitle><CardDescription>{connection.connected ? 'Social media accounts connected through Zernio. We monitor all new posts. We also scan up to three most recent posts per account. Comments are kept for 90 days.' : 'Sign in as your Zernio team owner to connect your accounts.'}</CardDescription></CardHeader>
+                <CardHeader><CardTitle><h2>{connection.connected ? 'Your accounts' : 'Connect Zernio'}</h2></CardTitle><CardDescription>{connection.connected ? 'We monitor new posts published after your accounts are connected. We also scan the three most recent posts from before you connected them. Comments are kept for 365 days.' : 'Sign in as your Zernio team owner to connect your accounts.'}</CardDescription></CardHeader>
                   <CardContent>
                     {connection.connected ? connection.accounts.length ? <ul className="workspace-accounts">{connection.accounts.map((account) => <li key={account.id}>
                     <Avatar size="lg"><AvatarImage src={account.profilePicture || undefined} alt={`${account.username} profile picture`} referrerPolicy="no-referrer" /><AvatarFallback><HugeiconsIcon icon={account.platform === 'instagram' ? InstagramIcon : YoutubeIcon} aria-hidden="true" /></AvatarFallback></Avatar>

@@ -34,7 +34,7 @@ Agreed during the product discussion on 9 November 2026. The interview is finish
 
 - One Dockerized TypeScript service: React/Vite frontend, Bun/Hono API, SQLite-backed data and jobs via `bun:sqlite`, background worker in the same service, one Kubernetes replica with a persistent volume. Deploy using the homelab's GHCR/ArgoCD pattern.
 - OpenAI credits via a **server-side API key** are the default for AI tasks; evaluate specialist models only where they clearly help. No model runs on the cluster. Keep OAuth tokens and the OpenAI key off clients.
-- Retain moderation history, including comment text, for **90 days**. Keep unsent drafts until sent or dismissed. Encrypted off-cluster backups and user-customizable moderation prompts are **post-demo** work. The volume alone is not a backup.
+- Retain moderation history, including comment text, for **365 days**. Keep unsent drafts until sent or dismissed. Encrypted off-cluster backups and user-customizable moderation prompts are **post-demo** work. The volume alone is not a backup.
 
 ## Verification gates
 
