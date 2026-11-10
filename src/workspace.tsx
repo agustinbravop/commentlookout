@@ -200,7 +200,8 @@ function CommentsTable({ comments, showPost = true, onRefresh, onSent, repliesFi
   const byId = new Map(comments.map(comment => [`${comment.accountId}:${comment.id}`, comment]));
   const rows = showPost ? comments.map(comment => ({ comment, depth: comment.parentId ? 1 : 0 })) : commentThreads(comments);
   return <Table className={`workspace-comment-table${showPost ? '' : ' workspace-posts-table'}`} aria-label={showPost ? 'Comments' : 'Post comments'}>
-    <TableHeader><TableRow><TableHead scope="col">Comment</TableHead>{showPost && <TableHead scope="col">Post</TableHead>}<TableHead scope="col">Date</TableHead><TableHead scope="col">Status</TableHead></TableRow></TableHeader>
+    {!showPost && <colgroup><col /><col className="workspace-comment-date-column" /><col className="workspace-comment-status-column" /></colgroup>}
+    <TableHeader className={showPost ? undefined : 'sr-only'}><TableRow><TableHead scope="col">Comment</TableHead>{showPost && <TableHead scope="col">Post</TableHead>}<TableHead scope="col">Date</TableHead><TableHead scope="col">Status</TableHead></TableRow></TableHeader>
     <TableBody>{rows.map(({ comment, depth }) => {
       const key = `${comment.accountId}:${comment.id}`, open = expanded === key;
       const parent = comment.parentId ? byId.get(`${comment.accountId}:${comment.parentId}`) : undefined;

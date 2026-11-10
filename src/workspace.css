@@ -105,6 +105,8 @@
 .workspace-post-list > tbody > .workspace-post-detail > td { padding: 0 0 16px 24px; }
 .workspace-post-comments { position: relative; min-width: 0; padding-inline-start: 12px; }
 .workspace-post-comments::before { content: ''; position: absolute; inset-inline-start: 0; top: 0; bottom: 16px; width: 8px; border-inline-start: 1px solid var(--border); border-bottom: 1px solid var(--border); border-end-start-radius: 8px; pointer-events: none; }
+.workspace-comment-date-column { width: 105px; }
+.workspace-comment-status-column { width: 220px; }
 .workspace-post-note { padding: 16px 10px; color: var(--muted-foreground); }
 .workspace-post-list > tbody > .workspace-post-detail { background: transparent; }
 .workspace-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap !important; }
@@ -127,6 +129,7 @@
 .workspace-detail-row td { padding: 0 0 20px; background: var(--muted); }
 .workspace-comment-table .workspace-detail-row[hidden] { display: none; }
 @media (max-width: 700px) {
+  .workspace-posts-table colgroup { display: none; }
   .workspace-detail-stack, .workspace-posts-table .workspace-detail-stack { grid-template-columns: minmax(0, 1fr) auto; }
   .workspace-detail-source, .workspace-posts-table .workspace-detail-source { grid-column: 1; }
   .workspace-detail-time, .workspace-posts-table .workspace-detail-time { grid-column: 2; }
