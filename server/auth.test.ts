@@ -58,6 +58,12 @@ test('Get Started sends guests to Google and signed-in users home', async () => 
   expect(new URL(member.headers.get('location')!, 'http://localhost').pathname).toBe('/home');
 });
 
+test('logo sends guests to landing and signed-in users to the app', async () => {
+  expect((await auth.request('/api/auth/home')).headers.get('location')).toBe('/');
+  const { token } = createSession('logo-owner', 'logo@example.com', 'Logo');
+  expect((await auth.request('/api/auth/home', { headers: { Cookie: `cl_session=${token}` } })).headers.get('location')).toBe('/home');
+});
+
 test('one Zernio team cannot belong to two users', () => {
   const first = createSession('first-owner', 'first@example.com', 'First').user;
   const second = createSession('second-owner', 'second@example.com', 'Second').user;

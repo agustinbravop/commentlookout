@@ -28,6 +28,8 @@ auth.get('/api/auth/start', (c) => getUser(getCookie(c, 'cl_session'))
   ? c.redirect(appOrigin ? `${new URL(appOrigin).origin}/home` : '/home')
   : c.redirect('/api/auth/google'));
 
+auth.get('/api/auth/home', (c) => c.redirect(getUser(getCookie(c, 'cl_session')) ? '/home' : '/'));
+
 auth.get('/api/auth/google', async (c) => {
   if (!clientId || !clientSecret || !redirectUri) return c.text('Google sign-in is not configured', 503);
   const state = oidc.randomState();
