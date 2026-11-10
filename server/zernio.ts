@@ -308,6 +308,48 @@ zernio.get('/api/backfill', (c) => {
   return c.json({ accounts });
 });
 
+zernio.get('/api/posts', (c) => {
+  const user = getUser(getCookie(c, 'cl_session'));
+  if (!user) return c.json({ error: 'Unauthenticated' }, 401);
+  const view = c.req.query('view') || 'all';
+  const sort = c.req.query('sort') || 'newest';
+  if (!['all', 'hidden', 'replies', 'hidden,replies'].includes(view) || !['newest', 'oldest'].includes(sort)) return c.json({ error: 'Invalid query' }, 400);
+  let before: string[] | undefined;
+  if (c.req.query('before')) {
+    try {
+      if (c.req.query('before')!.length > 1024) throw new Error();
+      const value: unknown = JSON.parse(Buffer.from(c.req.query('before')!, 'base64url').toString());
+      if (!Array.isArray(value) || value.length !== 3 || !value.every(part => typeof part === 'string' && part.length <= 256) ||
+        !['', '9999-12-31'].includes(value[0]) && !Number.isFinite(Date.parse(value[0]))) throw new Error();
+      before = value;
+    } catch { return c.json({ error: 'Invalid cursor' }, 400); }
+  }
+  const unknownDate = sort === 'oldest' ? '9999-12-31' : '';
+  const direction = sort === 'oldest' ? 'ASC' : 'DESC';
+  const comparison = sort === 'oldest' ? '>' : '<';
+  const filters = view.split(',').filter(item => item !== 'all').map(item => item === 'hidden' ? 'hiddenCount > 0' : 'needsReplyCount > 0');
+  const rows = db.prepare(`WITH summaries AS (
+    SELECT p.account_id AS accountId, p.post_id AS id, a.platform, p.content, p.picture, p.created_at AS createdAt,
+      COUNT(c.comment_id) AS commentCount, COALESCE(SUM(c.is_hidden = 1), 0) AS hiddenCount,
+      COALESCE(SUM(c.is_hidden = 0 AND assessment.classified_message = c.message AND assessment.category = 'safe'
+        AND assessment.needs_reply = 1 AND assessment.dismissed = 0 AND sent.comment_id IS NULL AND owner.comment_id IS NULL), 0) AS needsReplyCount
+    FROM monitored_posts p JOIN monitored_accounts a USING (user_id, account_id)
+    LEFT JOIN synced_comments c ON c.user_id = p.user_id AND c.account_id = p.account_id AND c.post_id = p.post_id
+    LEFT JOIN comment_assessments assessment ON assessment.user_id = c.user_id AND assessment.account_id = c.account_id AND assessment.comment_id = c.comment_id
+    LEFT JOIN comment_replies sent ON sent.user_id = c.user_id AND sent.account_id = c.account_id AND sent.comment_id = c.comment_id
+    LEFT JOIN owner_replies owner ON owner.user_id = c.user_id AND owner.account_id = c.account_id AND owner.comment_id = c.comment_id
+    WHERE p.user_id = ? GROUP BY p.account_id, p.post_id
+  ) SELECT * FROM summaries WHERE (COALESCE(createdAt, ?), accountId, id) ${comparison} (?, ?, ?)
+    ${filters.length ? `AND (${filters.join(' OR ')})` : ''}
+    ORDER BY COALESCE(createdAt, ?) ${direction}, accountId ${direction}, id ${direction} LIMIT 51`)
+    .all(user.id, unknownDate, ...(before || [sort === 'oldest' ? '' : '9999-12-31', '', '']), unknownDate) as {
+      accountId: string; id: string; platform: string; content: string | null; picture: string | null; createdAt: string | null;
+      commentCount: number; hiddenCount: number; needsReplyCount: number;
+    }[];
+  const page = rows.slice(0, 50), last = page.at(-1);
+  return c.json({ posts: page, nextCursor: rows.length > 50 && last ? Buffer.from(JSON.stringify([last.createdAt ?? unknownDate, last.accountId, last.id])).toString('base64url') : null });
+});
+
 zernio.get('/api/comments', (c) => {
   const user = getUser(getCookie(c, 'cl_session'));
   if (!user) return c.json({ error: 'Unauthenticated' }, 401);
@@ -319,6 +361,8 @@ zernio.get('/api/comments', (c) => {
   if (view.split(',').includes('replies')) filters.push("(comments.is_hidden = 0 AND sent.comment_id IS NULL AND owner.comment_id IS NULL AND assessment.classified_message = comments.message AND assessment.category = 'safe' AND assessment.needs_reply = 1 AND assessment.dismissed = 0)");
   const sort = c.req.query('sort') || 'newest';
   if (!['newest', 'oldest'].includes(sort)) return c.json({ error: 'Invalid sort' }, 400);
+  const accountId = c.req.query('accountId'), postId = c.req.query('postId');
+  if ((accountId !== undefined || postId !== undefined) && (!accountId || !postId || accountId.length > 256 || postId.length > 256)) return c.json({ error: 'Invalid post' }, 400);
   let before: string[] | undefined;
   if (c.req.query('before')) {
     try {
@@ -356,10 +400,10 @@ zernio.get('/api/comments', (c) => {
      LEFT JOIN comment_replies sent ON sent.user_id = comments.user_id AND sent.account_id = comments.account_id AND sent.comment_id = comments.comment_id
       LEFT JOIN owner_replies owner ON owner.user_id = comments.user_id AND owner.account_id = comments.account_id AND owner.comment_id = comments.comment_id
       LEFT JOIN moderation_jobs moderation ON moderation.user_id = comments.user_id AND moderation.account_id = comments.account_id AND moderation.comment_id = comments.comment_id
-         WHERE comments.user_id = ?${filters.length ? ` AND (${filters.join(' OR ')})` : ''}
+          WHERE comments.user_id = ?${accountId ? ' AND comments.account_id = ? AND comments.post_id = ?' : ''}${filters.length ? ` AND (${filters.join(' OR ')})` : ''}
          AND ${postsView ? `(${postDate} ${sort === 'oldest' ? '>' : '<'} ? OR (${postDate} = ? AND (comments.account_id, comments.post_id, comments.created_at, comments.comment_id) < (?, ?, ?, ?)))` : `(comments.created_at, comments.account_id, comments.comment_id) ${sort === 'oldest' ? '>' : '<'} (?, ?, ?)`}
        ORDER BY ${postsView ? `${postDate} ${postDirection}, comments.account_id DESC, comments.post_id DESC,` : ''} comments.created_at ${postsView ? 'DESC' : postDirection}, ${postsView ? '' : `comments.account_id ${postDirection},`} comments.comment_id ${postsView ? 'DESC' : postDirection} LIMIT 51`)
-      .all(user.id, ...cursorValues) as {
+       .all(user.id, ...(accountId ? [accountId, postId!] : []), ...cursorValues) as {
         accountId: string; platform: string; postId: string; postContent: string | null; id: string;
          postPicture: string | null; postCreatedAt: string | null;
         parentId: string | null; message: string; author: string; createdAt: string; isHidden: number; isBackfill: number;

@@ -17,12 +17,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { commentThreads } from './comment-threads';
 import './workspace.css';
 
 type Account = { id: string; platform: string; username: string; profilePicture: string | null };
 type Connection = { connected: boolean; accounts: Account[]; moderation?: Record<string, boolean> };
 type SavedComment = { id: string; accountId: string; platform: string; postId: string; postContent: string | null; postPicture: string | null; postCreatedAt: string | null; parentId: string | null; message: string; author: string; createdAt: string; isHidden: boolean; isBackfill: boolean; category: string | null; reason: string | null; draft: string | null; needsReply: boolean; replyStatus: string | null; replyMessage: string | null; replyAttempt: string | null; moderationStatus: string | null; restoreAttempt: string | null; hideAttempt: string | null; visibilityUncertain: boolean };
 type BackfillProgress = { accountId: string; selected: number; posts: number; completedPosts: number; expectedComments: number; savedComments: number };
+type SavedPost = { accountId: string; id: string; platform: string; content: string | null; picture: string | null; createdAt: string | null; commentCount: number; hiddenCount: number; needsReplyCount: number };
 
 function backfillStatus(progress?: BackfillProgress) {
   if (!progress?.selected) return 'Finding recent posts…';
@@ -188,8 +190,116 @@ function ReplyComposer({ comment, onSent, onResolved }: { comment: SavedComment;
   </form>;
 }
 
-export function Workspace() {
+function CommentsTable({ comments, showPost = true, onRefresh, onSent, repliesFilter = false, hiddenOnly = false }: {
+  comments: SavedComment[]; showPost?: boolean; onRefresh: () => void;
+  onSent: (comment: SavedComment, status: 'sent' | 'unknown', attempt?: string, message?: string) => void;
+  repliesFilter?: boolean; hiddenOnly?: boolean;
+}) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const byId = new Map(comments.map(comment => [`${comment.accountId}:${comment.id}`, comment]));
+  const rows = showPost ? comments.map(comment => ({ comment, depth: comment.parentId ? 1 : 0 })) : commentThreads(comments);
+  return <Table className={`workspace-comment-table${showPost ? '' : ' workspace-posts-table'}`} aria-label={showPost ? 'Comments' : 'Post comments'}>
+    <TableHeader><TableRow><TableHead scope="col">Comment</TableHead>{showPost && <TableHead scope="col">Post</TableHead>}<TableHead scope="col">Date</TableHead><TableHead scope="col">Status</TableHead></TableRow></TableHeader>
+    <TableBody>{rows.map(({ comment, depth }) => {
+      const key = `${comment.accountId}:${comment.id}`, open = expanded === key;
+      const parent = comment.parentId ? byId.get(`${comment.accountId}:${comment.parentId}`) : undefined;
+      const toggle = () => setExpanded(current => current === key ? null : key);
+      return <Fragment key={key}><TableRow className="workspace-comment-row" tabIndex={0} aria-label={`Comment by ${comment.author}`} aria-expanded={open} aria-controls={`comment-details-${comment.accountId}-${comment.id}`} onClick={toggle} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); } }}>
+        <TableCell className="workspace-comment-body" data-label="Comment"><div className={depth ? 'workspace-thread-comment' : undefined} style={depth ? { marginInlineStart: `${Math.min(depth, 4) * 16}px` } : undefined}>
+          {comment.parentId && <small className="workspace-reply-label">Reply{parent?.postId === comment.postId ? ` to ${parent.author}` : ''}</small>}
+          <strong>{comment.author}</strong><p className={open ? 'workspace-comment-full' : 'workspace-truncate'}>{comment.message}</p></div></TableCell>
+        {showPost && <TableCell className="workspace-post-cell" data-label="Post"><div className="workspace-post"><span className="workspace-thumbnail">{comment.postPicture && <img src={comment.postPicture} alt="" loading="lazy" referrerPolicy="no-referrer" onError={event => { event.currentTarget.style.display = 'none'; }} />}</span><p className="workspace-truncate">{comment.postContent || 'Post without a caption'}</p></div></TableCell>}
+        <TableCell data-label="Date"><time dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleDateString()}</time></TableCell>
+        <TableCell data-label="Status"><div className="workspace-statuses">{(comment.visibilityUncertain || comment.isHidden || comment.moderationStatus === 'hide_unknown' || comment.moderationStatus === 'pending' || comment.moderationStatus === 'hiding' || !comment.category) && <Badge className={comment.visibilityUncertain || comment.moderationStatus === 'hide_unknown' ? 'workspace-status-check' : comment.isHidden ? 'workspace-status-hidden' : 'workspace-status-pending'}>{comment.visibilityUncertain ? 'Check visibility' : comment.isHidden ? 'Hidden' : comment.moderationStatus === 'hide_unknown' ? 'Check hide' : comment.moderationStatus === 'pending' || comment.moderationStatus === 'hiding' ? 'Hide pending' : 'Pending'}</Badge>}{comment.category && comment.category !== 'safe' && <Badge className="workspace-status-check">{comment.category.replaceAll('_', ' ')}</Badge>}{comment.replyStatus === 'sent' || comment.replyStatus === 'user_confirmed' ? <Badge className="workspace-status-replied">Replied</Badge> : comment.replyStatus ? <Badge className="workspace-status-check">Check reply</Badge> : comment.needsReply ? <Badge className="workspace-status-draft">Needs reply</Badge> : null}</div></TableCell>
+      </TableRow><TableRow id={`comment-details-${comment.accountId}-${comment.id}`} hidden={!open} className="workspace-detail-row"><TableCell colSpan={showPost ? 4 : 3} className="workspace-action-cell"><div className="workspace-detail-stack">
+        <div className="workspace-detail-source"><Badge variant="outline" className="workspace-source-tag"><HugeiconsIcon icon={comment.platform === 'instagram' ? InstagramIcon : YoutubeIcon} aria-hidden="true" />{comment.platform}{comment.parentId ? ' · Reply' : ''}</Badge></div>
+        <time className="workspace-detail-time" dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleTimeString()}</time>
+        {comment.visibilityUncertain && <p role="status">Visibility needs checking on Instagram.</p>}
+        {(!comment.category || comment.reason) && <p className="workspace-assessment">{comment.reason || 'Waiting for review'}</p>}
+        {comment.isHidden && comment.platform === 'instagram' && <RestoreButton comment={comment} onRefresh={onRefresh} onRestored={onRefresh} />}
+        {comment.moderationStatus === 'pending' && <p role="status">Hide pending. We’ll retry.</p>}
+        {comment.moderationStatus === 'hiding' && <p role="status">Hiding…</p>}
+        {comment.moderationStatus === 'hide_unknown' && <HideRecovery comment={comment} onRefresh={onRefresh} />}
+        {repliesFilter && comment.needsReply && !comment.draft && <p role="status">Draft pending. Refresh to check again.</p>}
+        {!hiddenOnly && <ReplyComposer key={comment.draft || 'manual'} comment={comment} onResolved={onRefresh} onSent={(status, attempt, message) => onSent(comment, status, attempt, message)} />}
+      </div></TableCell></TableRow></Fragment>;
+    })}</TableBody></Table>;
+}
+
+function PostComments({ post }: { post: SavedPost }) {
+  const [comments, setComments] = useState<SavedComment[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const requestId = useRef(0);
+  const retryCursor = useRef<string | undefined>(undefined);
+  async function load(before?: string) {
+    const request = ++requestId.current;
+    retryCursor.current = before;
+    setLoading(true); setError('');
+    try {
+      const response = await fetch(`/api/comments?${new URLSearchParams({ accountId: post.accountId, postId: post.id, sort: 'oldest', ...(before ? { before } : {}) })}`);
+      if (!response.ok) throw new Error();
+      const page = await response.json() as { comments: SavedComment[]; nextCursor: string | null };
+      if (request !== requestId.current) return;
+      setComments(current => before ? [...current, ...page.comments] : page.comments); setCursor(page.nextCursor);
+    } catch { if (request === requestId.current) setError('Could not load this post’s comments.'); }
+    finally { if (request === requestId.current) setLoading(false); }
+  }
+  useEffect(() => { void load(); return () => { requestId.current++; }; }, [post.accountId, post.id]);
+  return <div className="workspace-post-comments">
+    {comments.length > 0 && <CommentsTable comments={comments} showPost={false} onRefresh={() => { void load(); }} onSent={(comment, status, attempt, message) => setComments(current => current.map(item => item.id === comment.id ? { ...item, replyStatus: status, replyAttempt: attempt ?? null, replyMessage: message ?? null, needsReply: false } : item))} />}
+    {!loading && !error && !comments.length && <p className="workspace-post-note">No saved comments on this post yet.</p>}
+    {loading && <p className="workspace-post-note" role="status">Loading comments…</p>}
+    {error && <Alert variant="destructive"><AlertDescription>{error} <Button variant="outline" onClick={() => { void load(retryCursor.current); }}>Retry</Button></AlertDescription></Alert>}
+    {cursor && !error && <Button className="workspace-load-more" variant="outline" disabled={loading} onClick={() => { void load(cursor); }}>Load more comments</Button>}
+  </div>;
+}
+
+function PostRow({ post, accounts }: { post: SavedPost; accounts: Account[] }) {
+  const [open, setOpen] = useState(false), [visited, setVisited] = useState(false);
+  const id = `post-comments-${post.accountId}-${post.id}`;
+  const toggle = () => { setOpen(current => !current); setVisited(true); };
+  return <><TableRow className="workspace-comment-row workspace-post-row" onClick={toggle}>
+    <TableCell data-label="Post"><div className="workspace-post"><Button variant="ghost" size="icon-sm" aria-label={`${open ? 'Close' : 'Open'} post: ${post.content || 'Post without a caption'}`} aria-expanded={open} aria-controls={id} onClick={event => { event.stopPropagation(); toggle(); }}><span aria-hidden="true">{open ? '▾' : '▸'}</span></Button><span className="workspace-thumbnail">{post.picture && <img src={post.picture} alt="" loading="lazy" referrerPolicy="no-referrer" onError={event => { event.currentTarget.style.display = 'none'; }} />}</span><p className="workspace-truncate">{post.content || 'Post without a caption'}</p></div></TableCell>
+    <TableCell data-label="Account"><span className="workspace-post-account"><HugeiconsIcon icon={post.platform === 'instagram' ? InstagramIcon : YoutubeIcon} aria-hidden="true" />{accounts.find(account => account.id === post.accountId)?.username || post.platform}</span></TableCell>
+    <TableCell data-label="Date">{post.createdAt ? <time dateTime={post.createdAt}>{new Date(post.createdAt).toLocaleDateString()}</time> : 'Date unavailable'}</TableCell>
+    <TableCell data-label="Comments"><div className="workspace-statuses"><span>{post.commentCount} comments</span>{post.hiddenCount > 0 && <Badge className="workspace-status-hidden">{post.hiddenCount} hidden</Badge>}{post.needsReplyCount > 0 && <Badge className="workspace-status-draft">{post.needsReplyCount} need reply</Badge>}</div></TableCell>
+  </TableRow><TableRow id={id} hidden={!open} className="workspace-post-detail"><TableCell colSpan={4}>{visited && <PostComments post={post} />}</TableCell></TableRow></>;
+}
+
+function PostsTable({ sort, filter, accounts, refresh }: { sort: string; filter: string; accounts: Account[]; refresh: number }) {
+  const [posts, setPosts] = useState<SavedPost[]>([]), [cursor, setCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true), [error, setError] = useState('');
+  const requestId = useRef(0);
+  const retryCursor = useRef<string | undefined>(undefined);
+  async function load(before?: string) {
+    const request = ++requestId.current; setLoading(true); setError('');
+    retryCursor.current = before;
+    try {
+      const response = await fetch(`/api/posts?${new URLSearchParams({ sort, view: filter || 'all', ...(before ? { before } : {}) })}`);
+      if (!response.ok) throw new Error();
+      const page = await response.json() as { posts: SavedPost[]; nextCursor: string | null };
+      if (request !== requestId.current) return;
+      setPosts(current => before ? [...current, ...page.posts] : page.posts); setCursor(page.nextCursor);
+    } catch { if (request === requestId.current) setError('Could not load posts.'); }
+    finally { if (request === requestId.current) setLoading(false); }
+  }
+  useEffect(() => { setPosts([]); setCursor(null); void load(); return () => { requestId.current++; }; }, [sort, filter, refresh]);
+  return <>
+    {posts.length > 0 && <Card className="workspace-inbox"><CardContent className="workspace-inbox-content"><Table className="workspace-comment-table workspace-post-list" aria-label="Posts">
+      <TableHeader><TableRow><TableHead scope="col">Post</TableHead><TableHead scope="col">Account</TableHead><TableHead scope="col">Date</TableHead><TableHead scope="col">Comments</TableHead></TableRow></TableHeader>
+      <TableBody>{posts.map(post => <PostRow key={JSON.stringify([post.accountId, post.id])} post={post} accounts={accounts} />)}</TableBody>
+    </Table></CardContent></Card>}
+    {!loading && !error && !posts.length && <Empty className="workspace-empty-note"><EmptyHeader><EmptyTitle>{filter ? 'No matching posts' : 'No posts yet'}</EmptyTitle><EmptyDescription>{filter ? 'No posts have comments matching these statuses.' : 'Monitored posts will appear here as they are discovered.'}</EmptyDescription></EmptyHeader></Empty>}
+    {loading && <div className="workspace-loading" role="status" aria-label="Loading posts"><Skeleton className="h-28 w-full" /></div>}
+    {error && <Alert variant="destructive"><AlertDescription>{error} <Button variant="outline" onClick={() => { void load(retryCursor.current); }}>Retry</Button></AlertDescription></Alert>}
+    {cursor && !error && <Button className="workspace-load-more" variant="outline" disabled={loading} onClick={() => { void load(cursor); }}>Load more posts</Button>}
+  </>;
+}
+
+export function Workspace() {
+  const [postsRefresh, setPostsRefresh] = useState(0);
   const [activeTab, setActiveTab] = useState(() => workspaceTab(location.pathname));
   const [filter, setFilter] = useState<('hidden' | 'replies')[]>([]);
   const [commentSort, setCommentSort] = useState<'newest' | 'oldest'>('newest');
@@ -231,7 +341,7 @@ export function Workspace() {
     }).catch(() => setError(true));
   }, []);
 
-  useEffect(() => { if (user && activeTab !== 'settings') { setComments([]); setNextCursor(null); void loadComments(); } }, [user, activeTab, filter, commentSort, postSort]);
+  useEffect(() => { if (user && activeTab === 'comments') { setComments([]); setNextCursor(null); void loadComments(); } else { requestId.current++; setCommentsLoading(false); } }, [user, activeTab, filter, commentSort]);
   useEffect(() => {
     if (!connection?.connected) return;
     void loadBackfill();
@@ -253,7 +363,7 @@ export function Workspace() {
     setCommentsLoading(true);
     setCommentsError('');
     try {
-      const response = await fetch(`/api/comments?${new URLSearchParams({ view: activeTab === 'posts' ? ['posts', ...filter].join(',') : filter.length ? filter.join(',') : 'all', sort: activeTab === 'posts' ? postSort : commentSort, ...(cursor ? { before: cursor } : {}) })}`);
+      const response = await fetch(`/api/comments?${new URLSearchParams({ view: filter.length ? filter.join(',') : 'all', sort: commentSort, ...(cursor ? { before: cursor } : {}) })}`);
       if (!response.ok) throw new Error('Could not load saved comments');
       const page = await response.json() as { comments: SavedComment[]; nextCursor: string | null };
       if (request !== requestId.current) return;
@@ -298,36 +408,16 @@ export function Workspace() {
                      <DropdownMenuTrigger render={<button className="workspace-sort-trigger" type="button" aria-label={`Sort ${activeTab} by ${currentSort === 'newest' ? 'recent' : 'oldest'}`} />}><HugeiconsIcon icon={SortByDown01Icon} aria-hidden="true" />{currentSort === 'newest' ? 'Recent' : 'Oldest'}</DropdownMenuTrigger>
                      <DropdownMenuContent align="end" className="w-[100px] min-w-0"><DropdownMenuGroup><DropdownMenuRadioGroup value={currentSort} onValueChange={(value) => { if (activeTab === 'posts') setPostSort(value as typeof postSort); else setCommentSort(value as typeof commentSort); }}><DropdownMenuRadioItem value="newest">Recent</DropdownMenuRadioItem><DropdownMenuRadioItem value="oldest">Oldest</DropdownMenuRadioItem></DropdownMenuRadioGroup></DropdownMenuGroup></DropdownMenuContent>
                    </DropdownMenu>
-                   <Button variant="outline" type="button" disabled={commentsLoading} onClick={() => loadComments()}><HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" aria-hidden="true" />Refresh</Button></div>
+                    <Button variant="outline" type="button" disabled={activeTab === 'comments' && commentsLoading} onClick={() => { if (activeTab === 'posts') setPostsRefresh(current => current + 1); else void loadComments(); }}><HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" aria-hidden="true" />Refresh</Button></div>
               </div>
-              {comments.length > 0 && <Card className="workspace-inbox">
-                  <CardContent className="workspace-inbox-content"><Table className={`workspace-comment-table${activeTab === 'posts' ? ' workspace-posts-table' : ''}`} aria-label={activeTab === 'posts' ? 'Comments grouped by post' : filter.length ? 'Filtered comments' : 'All comments'}>
-                    <TableHeader><TableRow><TableHead scope="col">Comment</TableHead>{activeTab === 'comments' && <TableHead scope="col">Post</TableHead>}<TableHead scope="col">Date</TableHead><TableHead scope="col">Status</TableHead></TableRow></TableHeader>
-                     <TableBody>{comments.map((comment, index) => <Fragment key={`${comment.accountId}:${comment.id}`}>{activeTab === 'posts' && (index === 0 || comments[index - 1].accountId !== comment.accountId || comments[index - 1].postId !== comment.postId) && <TableRow className="workspace-group-row"><TableCell colSpan={3}><div className="workspace-post"><span className="workspace-thumbnail">{comment.postPicture && <img src={comment.postPicture} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = 'none'; }} />}</span><div><strong>{comment.postContent || 'Post without a caption'}</strong><small>{comment.postCreatedAt ? `Posted ${new Date(comment.postCreatedAt).toLocaleDateString()}` : 'Post date unavailable'}</small></div></div></TableCell></TableRow>}<TableRow className="workspace-comment-row" tabIndex={0} aria-label={`Comment by ${comment.author}`} aria-expanded={expanded === `${comment.accountId}:${comment.id}`} aria-controls={`comment-details-${comment.accountId}-${comment.id}`} onClick={() => setExpanded((current) => current === `${comment.accountId}:${comment.id}` ? null : `${comment.accountId}:${comment.id}`)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExpanded((current) => current === `${comment.accountId}:${comment.id}` ? null : `${comment.accountId}:${comment.id}`); } }}>
-                  <TableCell className="workspace-comment-body" data-label="Comment">
-                      <strong>{comment.author}</strong><p className={expanded === `${comment.accountId}:${comment.id}` ? 'workspace-comment-full' : 'workspace-truncate'}>{comment.message}</p>
-                  </TableCell>
-                    {activeTab === 'comments' && <TableCell className="workspace-post-cell" data-label="Post"><div className="workspace-post"><span className="workspace-thumbnail">{comment.postPicture && <img src={comment.postPicture} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = 'none'; }} />}</span><p className="workspace-truncate">{comment.postContent || 'Post without a caption'}</p></div></TableCell>}
-                    <TableCell data-label="Date"><time dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleDateString()}</time></TableCell>
-                    <TableCell data-label="Status"><div className="workspace-statuses">{(comment.visibilityUncertain || comment.isHidden || comment.moderationStatus === 'hide_unknown' || comment.moderationStatus === 'pending' || comment.moderationStatus === 'hiding' || !comment.category) && <Badge className={comment.visibilityUncertain || comment.moderationStatus === 'hide_unknown' ? 'workspace-status-check' : comment.isHidden ? 'workspace-status-hidden' : 'workspace-status-pending'}>{comment.visibilityUncertain ? 'Check visibility' : comment.isHidden ? 'Hidden' : comment.moderationStatus === 'hide_unknown' ? 'Check hide' : comment.moderationStatus === 'pending' || comment.moderationStatus === 'hiding' ? 'Hide pending' : 'Pending'}</Badge>}{comment.category && comment.category !== 'safe' && <Badge className="workspace-status-check">{comment.category.replaceAll('_', ' ')}</Badge>}{comment.replyStatus === 'sent' || comment.replyStatus === 'user_confirmed' ? <Badge className="workspace-status-replied">Replied</Badge> : comment.replyStatus ? <Badge className="workspace-status-check">Check reply</Badge> : comment.needsReply ? <Badge className="workspace-status-draft">Needs reply</Badge> : null}</div></TableCell>
-                   </TableRow><TableRow id={`comment-details-${comment.accountId}-${comment.id}`} hidden={expanded !== `${comment.accountId}:${comment.id}`} className="workspace-detail-row"><TableCell colSpan={activeTab === 'posts' ? 3 : 4} className="workspace-action-cell"><div className="workspace-detail-stack">
-                          <div className="workspace-detail-source"><Badge variant="outline" className="workspace-source-tag"><HugeiconsIcon icon={comment.platform === 'instagram' ? InstagramIcon : YoutubeIcon} aria-hidden="true" />{comment.platform}{comment.parentId ? ' · Reply' : ''}</Badge></div>
-                          <time className="workspace-detail-time" dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleTimeString()}</time>
-                      {comment.visibilityUncertain && <p role="status">Visibility needs checking on Instagram.</p>}
-                         {(!comment.category || comment.reason) && <p className="workspace-assessment">{comment.reason || 'Waiting for review'}</p>}
-                       {comment.isHidden && comment.platform === 'instagram' && <RestoreButton comment={comment} onRefresh={() => { void loadComments(); }} onRestored={() => { void loadComments(); }} />}
-                     {comment.moderationStatus === 'pending' && <p role="status">Hide pending. We’ll retry.</p>}
-                     {comment.moderationStatus === 'hiding' && <p role="status">Hiding…</p>}
-                     {comment.moderationStatus === 'hide_unknown' && <HideRecovery comment={comment} onRefresh={() => { void loadComments(); }} />}
-                       {activeTab === 'comments' && filter.includes('replies') && comment.needsReply && !comment.draft && <p role="status">Draft pending. Refresh to check again.</p>}
-                        {(activeTab === 'posts' || filter.length !== 1 || filter[0] !== 'hidden') && <ReplyComposer key={comment.draft || 'manual'} comment={comment} onResolved={() => { void loadComments(); }} onSent={(status, attempt, message) => setComments((current) => activeTab === 'comments' && filter.includes('replies') && status === 'sent' ? current.filter((item) => item.accountId !== comment.accountId || item.id !== comment.id) : current.map((item) => item.accountId === comment.accountId && item.id === comment.id ? { ...item, replyStatus: status, replyAttempt: attempt ?? null, replyMessage: message ?? null, needsReply: false } : item))} />}
-                   </div></TableCell>
-                </TableRow></Fragment>)}</TableBody></Table></CardContent>
-              </Card>}
-                 {connection && !commentsLoading && !commentsError && comments.length === 0 && <Empty className="workspace-empty-note"><EmptyHeader><EmptyTitle><h2>{filter.length === 1 && filter[0] === 'hidden' ? 'No hidden comments' : filter.length === 1 && filter[0] === 'replies' ? 'No replies to review' : filter.length ? 'No matching comments' : activeTab === 'posts' ? 'No posts yet' : 'No comments yet'}</h2></EmptyTitle><EmptyDescription>{filter.length ? filter.length > 1 ? 'No comments match the selected statuses.' : filter[0] === 'hidden' ? 'Hidden comments will appear here when available.' : 'Comments selected for a reply will appear here.' : connection.connected ? 'We’re scanning recent posts. New comments can take up to 10 minutes to appear.' : connectionError ? 'Check your Zernio connection and try again.' : 'Connect Zernio to start seeing your comments.'}</EmptyDescription></EmptyHeader></Empty>}
+               {activeTab === 'posts' && user && <PostsTable sort={postSort} filter={filter.join(',')} accounts={connection?.accounts || []} refresh={postsRefresh} />}
+               {activeTab === 'comments' && <>
+               {comments.length > 0 && <Card className="workspace-inbox"><CardContent className="workspace-inbox-content"><CommentsTable comments={comments} onRefresh={() => { void loadComments(); }} repliesFilter={filter.includes('replies')} hiddenOnly={filter.length === 1 && filter[0] === 'hidden'} onSent={(comment, status, attempt, message) => setComments(current => filter.includes('replies') && status === 'sent' ? current.filter(item => item.accountId !== comment.accountId || item.id !== comment.id) : current.map(item => item.accountId === comment.accountId && item.id === comment.id ? { ...item, replyStatus: status, replyAttempt: attempt ?? null, replyMessage: message ?? null, needsReply: false } : item))} /></CardContent></Card>}
+                  {connection && !commentsLoading && !commentsError && comments.length === 0 && <Empty className="workspace-empty-note"><EmptyHeader><EmptyTitle><h2>{filter.length === 1 && filter[0] === 'hidden' ? 'No hidden comments' : filter.length === 1 && filter[0] === 'replies' ? 'No replies to review' : filter.length ? 'No matching comments' : 'No comments yet'}</h2></EmptyTitle><EmptyDescription>{filter.length ? filter.length > 1 ? 'No comments match the selected statuses.' : filter[0] === 'hidden' ? 'Hidden comments will appear here when available.' : 'Comments selected for a reply will appear here.' : connection.connected ? 'We’re scanning recent posts. New comments can take up to 10 minutes to appear.' : connectionError ? 'Check your Zernio connection and try again.' : 'Connect Zernio to start seeing your comments.'}</EmptyDescription></EmptyHeader></Empty>}
               {commentsLoading && <div className="workspace-loading" role="status" aria-label="Loading comments"><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /></div>}
               {commentsError && <Alert variant="destructive"><AlertDescription>{commentsError} <Button variant="outline" type="button" onClick={() => loadComments(nextCursor || undefined)}>Retry</Button></AlertDescription></Alert>}
-               {nextCursor && !commentsError && <Button className="workspace-load-more" variant="outline" type="button" disabled={commentsLoading} onClick={() => loadComments(nextCursor)}>Load more</Button>}
+                {nextCursor && !commentsError && <Button className="workspace-load-more" variant="outline" type="button" disabled={commentsLoading} onClick={() => loadComments(nextCursor)}>Load more</Button>}
+               </>}
               </TabsContent>}
               {activeTab === 'settings' && <TabsContent value="settings">
                 <div className="workspace-heading"><h1>Settings</h1></div>
