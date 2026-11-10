@@ -13,7 +13,7 @@ if (redirectUri && !redirectUri.startsWith('https://') && !redirectUri.startsWit
 }
 const cookieOptions = { httpOnly: true, secure: redirectUri?.startsWith('https://') ?? false, sameSite: 'Lax' as const, path: '/' };
 const now = () => Math.floor(Date.now() / 1000);
-const destination = () => appOrigin ? `${new URL(appOrigin).origin}/home` : '/home';
+const destination = () => appOrigin ? `${new URL(appOrigin).origin}/app` : '/app';
 
 function encrypt(value: string) {
   const iv = randomBytes(12);
@@ -310,26 +310,42 @@ zernio.get('/api/comments', (c) => {
   const user = getUser(getCookie(c, 'cl_session'));
   if (!user) return c.json({ error: 'Unauthenticated' }, 401);
   const view = c.req.query('view') || 'all';
-  if (!['all', 'hidden', 'replies'].includes(view)) return c.json({ error: 'Invalid view' }, 400);
-  let before: [string, string, string] | undefined;
+  if (!['all', 'posts', 'hidden', 'replies', 'hidden,replies', 'posts,hidden', 'posts,replies', 'posts,hidden,replies'].includes(view)) return c.json({ error: 'Invalid view' }, 400);
+  const postsView = view === 'posts' || view.startsWith('posts,');
+  const filters: string[] = [];
+  if (view.split(',').includes('hidden')) filters.push('comments.is_hidden = 1');
+  if (view.split(',').includes('replies')) filters.push("(comments.is_hidden = 0 AND sent.comment_id IS NULL AND owner.comment_id IS NULL AND assessment.classified_message = comments.message AND assessment.category = 'safe' AND assessment.needs_reply = 1 AND assessment.dismissed = 0)");
+  const sort = c.req.query('sort') || 'newest';
+  if (!['newest', 'oldest'].includes(sort)) return c.json({ error: 'Invalid sort' }, 400);
+  let before: string[] | undefined;
   if (c.req.query('before')) {
     try {
       if (c.req.query('before')!.length > 1024) throw new Error('Invalid cursor');
       const parsed: unknown = JSON.parse(Buffer.from(c.req.query('before')!, 'base64url').toString());
-      if (!Array.isArray(parsed) || parsed.length !== 3 || !parsed.every((part) => typeof part === 'string') ||
-          parsed[0].length > 64 || !Number.isFinite(Date.parse(parsed[0])) || parsed[1].length > 128 || parsed[2].length > 128) throw new Error('Invalid cursor');
-      before = parsed as [string, string, string];
+      if (!Array.isArray(parsed) || parsed.length !== (postsView ? 5 : 3) || !parsed.every((part) => typeof part === 'string' && part.length <= 128) ||
+          (postsView ? !['', '9999-12-31'].includes(parsed[0]) && !Number.isFinite(Date.parse(parsed[0])) || !Number.isFinite(Date.parse(parsed[3])) : !Number.isFinite(Date.parse(parsed[0])))) throw new Error('Invalid cursor');
+      before = parsed;
     } catch { return c.json({ error: 'Invalid cursor' }, 400); }
   }
+  const postDate = sort === 'oldest' ? "COALESCE(posts.created_at, '9999-12-31')" : "COALESCE(posts.created_at, '')";
+  const postDirection = sort === 'oldest' ? 'ASC' : 'DESC';
+  const cursorValues = postsView
+    ? before ? [before[0], ...before] : [sort === 'oldest' ? '' : '9999-12-31', sort === 'oldest' ? '' : '9999-12-31', '', '', '', '']
+    : before ?? [sort === 'oldest' ? '' : '9999-12-31', '', ''];
   const rows = db.prepare(`SELECT comments.account_id AS accountId, accounts.platform, comments.post_id AS postId,
-       posts.content AS postContent, comments.comment_id AS id, comments.parent_id AS parentId,
+        posts.content AS postContent, posts.picture AS postPicture, posts.created_at AS postCreatedAt, comments.comment_id AS id, comments.parent_id AS parentId,
        comments.message, comments.author, comments.created_at AS createdAt, comments.is_hidden AS isHidden,
        CASE WHEN historical.comment_id IS NOT NULL THEN 1 ELSE 0 END AS isBackfill,
        CASE WHEN assessment.classified_message = comments.message THEN assessment.category END AS category,
         CASE WHEN assessment.classified_message = comments.message THEN assessment.reason END AS reason,
-        CASE WHEN assessment.classified_message = comments.message AND assessment.category = 'safe' AND assessment.needs_reply = 1 AND assessment.dismissed = 0 THEN assessment.draft END AS draft,
-        CASE WHEN owner.comment_id IS NOT NULL THEN 'sent' ELSE sent.status END AS replyStatus,
-        moderation.status AS moderationStatus
+         CASE WHEN assessment.classified_message = comments.message AND assessment.category = 'safe' AND assessment.needs_reply = 1 AND assessment.dismissed = 0 THEN assessment.draft END AS draft,
+         CASE WHEN assessment.classified_message = comments.message AND assessment.category = 'safe' AND assessment.needs_reply = 1 AND assessment.dismissed = 0 AND comments.is_hidden = 0 AND sent.comment_id IS NULL AND owner.comment_id IS NULL THEN 1 ELSE 0 END AS needsReply,
+        CASE WHEN sent.status = 'sent' AND sent.reply_id IS NULL THEN 'user_confirmed' WHEN owner.comment_id IS NOT NULL THEN 'sent' ELSE sent.status END AS replyStatus,
+        CASE WHEN sent.status IN ('pending', 'unknown') THEN sent.message END AS replyMessage,
+        CASE WHEN sent.status IN ('pending', 'unknown') THEN sent.idempotency_key END AS replyAttempt,
+        moderation.status AS moderationStatus, COALESCE(moderation.visibility_uncertain, 0) AS visibilityUncertain,
+        CASE WHEN moderation.status IN ('restore_pending', 'restore_unknown') THEN moderation.restore_token END AS restoreAttempt,
+        CASE WHEN moderation.status = 'hide_unknown' THEN moderation.claim_token END AS hideAttempt
      FROM synced_comments comments
      JOIN monitored_posts posts ON posts.user_id = comments.user_id AND posts.account_id = comments.account_id AND posts.post_id = comments.post_id
      JOIN monitored_accounts accounts ON accounts.user_id = comments.user_id AND accounts.account_id = comments.account_id
@@ -338,21 +354,20 @@ zernio.get('/api/comments', (c) => {
      LEFT JOIN comment_replies sent ON sent.user_id = comments.user_id AND sent.account_id = comments.account_id AND sent.comment_id = comments.comment_id
       LEFT JOIN owner_replies owner ON owner.user_id = comments.user_id AND owner.account_id = comments.account_id AND owner.comment_id = comments.comment_id
       LEFT JOIN moderation_jobs moderation ON moderation.user_id = comments.user_id AND moderation.account_id = comments.account_id AND moderation.comment_id = comments.comment_id
-      WHERE comments.user_id = ? AND (? = 'all' OR (? = 'hidden' AND comments.is_hidden = 1)
-        OR (? = 'replies' AND comments.is_hidden = 0 AND sent.comment_id IS NULL AND owner.comment_id IS NULL
-          AND assessment.classified_message = comments.message AND assessment.category = 'safe' AND assessment.needs_reply = 1 AND assessment.dismissed = 0))
-       AND (comments.created_at, comments.account_id, comments.comment_id) < (?, ?, ?)
-     ORDER BY comments.created_at DESC, comments.account_id DESC, comments.comment_id DESC LIMIT 51`)
-     .all(user.id, view, view, view, ...(before ?? ['9999-12-31', '', ''])) as {
-       accountId: string; platform: string; postId: string; postContent: string | null; id: string;
+         WHERE comments.user_id = ?${filters.length ? ` AND (${filters.join(' OR ')})` : ''}
+         AND ${postsView ? `(${postDate} ${sort === 'oldest' ? '>' : '<'} ? OR (${postDate} = ? AND (comments.account_id, comments.post_id, comments.created_at, comments.comment_id) < (?, ?, ?, ?)))` : `(comments.created_at, comments.account_id, comments.comment_id) ${sort === 'oldest' ? '>' : '<'} (?, ?, ?)`}
+       ORDER BY ${postsView ? `${postDate} ${postDirection}, comments.account_id DESC, comments.post_id DESC,` : ''} comments.created_at ${postsView ? 'DESC' : postDirection}, ${postsView ? '' : `comments.account_id ${postDirection},`} comments.comment_id ${postsView ? 'DESC' : postDirection} LIMIT 51`)
+      .all(user.id, ...cursorValues) as {
+        accountId: string; platform: string; postId: string; postContent: string | null; id: string;
+         postPicture: string | null; postCreatedAt: string | null;
         parentId: string | null; message: string; author: string; createdAt: string; isHidden: number; isBackfill: number;
-         category: string | null; reason: string | null; draft: string | null; replyStatus: string | null; moderationStatus: string | null;
+          category: string | null; reason: string | null; draft: string | null; needsReply: number; replyStatus: string | null; replyMessage: string | null; replyAttempt: string | null; moderationStatus: string | null; restoreAttempt: string | null; hideAttempt: string | null; visibilityUncertain: number;
     }[];
   const hasMore = rows.length > 50;
   const page = rows.slice(0, 50);
   const last = page.at(-1);
-  return c.json({ comments: page.map(({ isHidden, isBackfill, ...comment }) => ({ ...comment, isHidden: !!isHidden, isBackfill: !!isBackfill })),
-    nextCursor: hasMore && last ? Buffer.from(JSON.stringify([last.createdAt, last.accountId, last.id])).toString('base64url') : null });
+  return c.json({ comments: page.map(({ isHidden, isBackfill, visibilityUncertain, needsReply, ...comment }) => ({ ...comment, isHidden: !!isHidden, isBackfill: !!isBackfill, visibilityUncertain: !!visibilityUncertain, needsReply: !!needsReply })),
+     nextCursor: hasMore && last ? Buffer.from(JSON.stringify(postsView ? [last.postCreatedAt ?? (sort === 'oldest' ? '9999-12-31' : ''), last.accountId, last.postId, last.createdAt, last.id] : [last.createdAt, last.accountId, last.id])).toString('base64url') : null });
 });
 
 zernio.put('/api/comments/:accountId/:commentId/draft', async (c) => {

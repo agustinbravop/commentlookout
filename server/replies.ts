@@ -70,8 +70,8 @@ replies.post('/api/comments/:accountId/:commentId/reply', async (c) => {
     return c.json({ error: 'Could not verify the comment and connection. Nothing was sent.' }, 502);
   }
   const key = crypto.randomUUID();
-  const inserted = db.prepare(`INSERT OR IGNORE INTO comment_replies VALUES (?, ?, ?, ?, ?, 'pending', NULL)`)
-    .run(user.id, accountId, commentId, body.message.trim(), key);
+  const inserted = db.prepare(`INSERT OR IGNORE INTO comment_replies (user_id, account_id, comment_id, message, idempotency_key, status, started_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`)
+    .run(user.id, accountId, commentId, body.message.trim(), key, Math.floor(Date.now() / 1000));
   if (!inserted.changes) return c.json({ error: 'This reply was already sent or its delivery needs checking' }, 409);
   if (!db.prepare('SELECT 1 FROM zernio_connections WHERE user_id = ? AND owner_id = ?').get(user.id, comment.ownerId)) {
     db.prepare('DELETE FROM comment_replies WHERE user_id = ? AND account_id = ? AND comment_id = ? AND status = ?')
@@ -101,6 +101,21 @@ replies.post('/api/comments/:accountId/:commentId/reply', async (c) => {
     db.prepare(`UPDATE comment_replies SET status = 'unknown' WHERE user_id = ? AND account_id = ? AND comment_id = ? AND status = 'pending'`)
       .run(user.id, accountId, commentId);
     console.error('Zernio reply unconfirmed', { reason: error instanceof Error ? error.message : 'Unknown error' });
-    return c.json({ error: 'Delivery unconfirmed. Check Zernio before trying again; this app will not resend automatically.' }, 502);
+    return c.json({ status: 'unknown', attempt: key, error: 'Delivery unconfirmed. Check Zernio before trying again; this app will not resend automatically.' }, 502);
   }
+});
+
+replies.post('/api/comments/:accountId/:commentId/reply/resolve', async (c) => {
+  const user = getUser(getCookie(c, 'cl_session'));
+  if (!user) return c.json({ error: 'Unauthenticated' }, 401);
+  if (![new URL(c.req.url).origin, Bun.env.APP_ORIGIN && new URL(Bun.env.APP_ORIGIN).origin].includes(c.req.header('origin'))) return c.json({ error: 'Invalid origin' }, 403);
+  const body = await c.req.json().catch(() => null) as { resolution?: unknown; attempt?: unknown } | null;
+  if (!body || !['found', 'not_sent'].includes(String(body.resolution)) || typeof body.attempt !== 'string') return c.json({ error: 'Invalid resolution' }, 400);
+  const { accountId, commentId } = c.req.param();
+  const params = [user.id, accountId, commentId, body.attempt, Math.floor(Date.now() / 1000) - 60] as const;
+  const condition = "user_id = ? AND account_id = ? AND comment_id = ? AND idempotency_key = ? AND status IN ('pending', 'unknown') AND (status = 'unknown' OR started_at IS NULL OR started_at <= ?)";
+  const result = body.resolution === 'found'
+    ? db.prepare(`UPDATE comment_replies SET status = 'sent', reply_id = NULL WHERE ${condition}`).run(...params)
+    : db.prepare(`DELETE FROM comment_replies WHERE ${condition}`).run(...params);
+  return result.changes ? c.json({ status: body.resolution === 'found' ? 'user_confirmed' : 'ready' }) : c.json({ error: 'Attempt changed or may still be sending. Refresh and check again.' }, 409);
 });

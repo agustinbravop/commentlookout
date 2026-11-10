@@ -1,28 +1,33 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { InstagramIcon, Refresh01Icon, YoutubeIcon } from '@hugeicons/core-free-icons';
-import { Brand } from './landing';
+import { InstagramIcon, LinkOffIcon, Refresh01Icon, SortByDown01Icon, YoutubeIcon } from '@hugeicons/core-free-icons';
+import { Brand, SiteFooter } from './landing';
+import { workspacePaths, workspaceTab } from './routes';
+import { AccountMenu, type SignedInUser } from './account-menu';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
 import './workspace.css';
 
-type User = { id: string; email: string; name: string; picture: string | null };
 type Account = { id: string; platform: string; username: string; profilePicture: string | null };
 type Connection = { connected: boolean; accounts: Account[]; moderation?: Record<string, boolean> };
-type SavedComment = { id: string; accountId: string; platform: string; postId: string; postContent: string | null; parentId: string | null; message: string; author: string; createdAt: string; isHidden: boolean; isBackfill: boolean; category: string | null; reason: string | null; draft: string | null; replyStatus: string | null; moderationStatus: string | null };
+type SavedComment = { id: string; accountId: string; platform: string; postId: string; postContent: string | null; postPicture: string | null; postCreatedAt: string | null; parentId: string | null; message: string; author: string; createdAt: string; isHidden: boolean; isBackfill: boolean; category: string | null; reason: string | null; draft: string | null; needsReply: boolean; replyStatus: string | null; replyMessage: string | null; replyAttempt: string | null; moderationStatus: string | null; restoreAttempt: string | null; hideAttempt: string | null; visibilityUncertain: boolean };
 type BackfillProgress = { accountId: string; selected: number; posts: number; completedPosts: number; expectedComments: number; savedComments: number };
 
 function backfillStatus(progress?: BackfillProgress) {
   if (!progress?.selected) return 'Finding recent posts…';
   if (!progress.posts) return 'No recent posts to scan';
-  return `${progress.completedPosts}/${progress.posts} posts scanned · ${progress.savedComments} comments saved`;
+  return progress.completedPosts >= progress.posts ? 'Recent posts scanned' : 'Scanning recent posts…';
 }
 
 function ModerationSetting({ account, initial }: { account: Account; initial: boolean | undefined }) {
@@ -43,22 +48,38 @@ function ModerationSetting({ account, initial }: { account: Account; initial: bo
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not save your choice.'); }
     finally { setBusy(false); }
   }}>
-    <label><input type="checkbox" checked={enabled} disabled={busy} onChange={(event) => setEnabled(event.target.checked)} />{' '}
-      Auto-hide spam, scams and profanity</label>
-    <p>Includes the three recent posts scanned. Uncertain comments stay for review. Replies are always manual.{account.platform === 'youtube' && ' YouTube moderation is not active yet.'}</p>
+    <div className="workspace-moderation-choice"><Checkbox id={`moderation-${account.id}`} checked={enabled} disabled={busy} onCheckedChange={setEnabled} aria-describedby={`moderation-help-${account.id}`} />
+      <label htmlFor={`moderation-${account.id}`}>Auto-hide spam, scams and profanity comments</label></div>
+    <p id={`moderation-help-${account.id}`}>Includes up to three recent posts.{account.platform === 'youtube' && ' YouTube moderation is not active yet.'}</p>
     <Button type="submit" variant="outline" disabled={busy || confirmed === enabled}>{busy ? 'Saving…' : confirmed === undefined ? 'Confirm choice' : 'Save choice'}</Button>
+    <span className="sr-only" role="status">{confirmed !== undefined && confirmed === enabled ? 'Moderation choice saved.' : ''}</span>
     {error && <p role="alert">{error}</p>}
   </form>;
 }
 
-function RestoreButton({ comment, onRestored }: { comment: SavedComment; onRestored: () => void }) {
+function RestoreButton({ comment, onRestored, onRefresh }: { comment: SavedComment; onRestored: () => void; onRefresh: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  if (comment.moderationStatus === 'restore_pending' || comment.moderationStatus === 'restore_unknown') return <div className="workspace-editor"><p role="alert">Restoration is unconfirmed. Check Instagram before deciding.</p>
+    {comment.restoreAttempt && <div className="workspace-reply-actions">{(['restored', 'hidden'] as const).map((resolution) => <Button key={resolution} type="button" variant="outline" disabled={busy} onClick={async () => {
+      setBusy(true); setError('');
+      try {
+        const response = await fetch(`/api/comments/${encodeURIComponent(comment.accountId)}/${encodeURIComponent(comment.id)}/restore/resolve`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resolution, attempt: comment.restoreAttempt }),
+        });
+        const result = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(result.error || 'Could not resolve restoration.');
+        if (resolution === 'restored') onRestored(); else onRefresh();
+      } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not resolve restoration.'); }
+      finally { setBusy(false); }
+    }}>{resolution === 'restored' ? 'I checked; it is visible' : 'I checked; it is still hidden'}</Button>)}</div>}
+    {error && <p role="alert">{error}</p>}</div>;
   return <div className="workspace-editor"><Button variant="outline" type="button" disabled={busy} onClick={async () => {
     setBusy(true); setError('');
     try {
       const response = await fetch(`/api/comments/${encodeURIComponent(comment.accountId)}/${encodeURIComponent(comment.id)}/restore`, { method: 'POST' });
-      const result = await response.json() as { error?: string };
+      const result = await response.json() as { error?: string; status?: string };
+      if (result.status === 'restore_unknown') { onRefresh(); return; }
       if (!response.ok) throw new Error(result.error || 'Could not restore comment.');
       onRestored();
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not restore comment.'); }
@@ -66,14 +87,73 @@ function RestoreButton({ comment, onRestored }: { comment: SavedComment; onResto
   }}>{busy ? 'Restoring…' : 'Restore comment'}</Button>{error && <p role="alert">{error}</p>}</div>;
 }
 
-function ReplyComposer({ comment, onSent, onDismiss }: { comment: SavedComment; onSent: (status: 'sent' | 'unknown') => void; onDismiss: () => void }) {
-  const [open, setOpen] = useState(!!comment.draft);
-  const [message, setMessage] = useState(comment.draft || '');
+function HideRecovery({ comment, onRefresh }: { comment: SavedComment; onRefresh: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  return <div className="workspace-editor"><p role="alert">Hide unconfirmed. Check Instagram. If still visible, choosing that option allows automatic retry.</p>
+    {comment.hideAttempt && <div className="workspace-reply-actions">{(['hidden', 'visible'] as const).map((resolution) => <Button key={resolution} type="button" variant="outline" disabled={busy} onClick={async () => {
+      setBusy(true); setError('');
+      try {
+        const response = await fetch(`/api/comments/${encodeURIComponent(comment.accountId)}/${encodeURIComponent(comment.id)}/hide/resolve`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resolution, attempt: comment.hideAttempt }),
+        });
+        const result = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(result.error || 'Could not resolve hide.');
+        onRefresh();
+      } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not resolve hide.'); }
+      finally { setBusy(false); }
+    }}>{resolution === 'hidden' ? 'I checked; it is hidden' : 'Still visible; allow retry'}</Button>)}</div>}
+    {error && <p role="alert">{error}</p>}</div>;
+}
+
+function ReplyComposer({ comment, onSent, onResolved }: { comment: SavedComment; onSent: (status: 'sent' | 'unknown', attempt?: string, message?: string) => void; onResolved: (status: string | null) => void }) {
+  const [open, setOpen] = useState(true);
+  const [message, setMessage] = useState(comment.replyMessage || comment.draft || '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
-  if (comment.replyStatus === 'sent') return <Badge variant="secondary">Replied</Badge>;
-  if (comment.replyStatus) return <p role="alert">Reply delivery is unconfirmed. Check Zernio before replying again.</p>;
+  const [saving, setSaving] = useState(false);
+  const savedDraft = useRef(comment.draft || '');
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const latestMessage = useRef(message);
+  latestMessage.current = message;
+  // shortcut: manual replies remain local until sent; persist them if they must survive a refresh.
+  const saveDraft = (draft: string) => {
+    if (!comment.draft) return saveQueue.current;
+    if (!draft.trim()) return Promise.reject(new Error('Enter a reply to save this draft.'));
+    saveQueue.current = saveQueue.current.catch(() => {}).then(async () => {
+      if (draft === savedDraft.current) return;
+      setSaving(true);
+      try {
+        const response = await fetch(`/api/comments/${encodeURIComponent(comment.accountId)}/${encodeURIComponent(comment.id)}/draft`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draft }) });
+        if (!response.ok) throw new Error('Could not save draft. Try again.');
+        savedDraft.current = draft;
+        if (latestMessage.current === draft) { setSaved(true); setError(''); }
+      } finally { setSaving(false); }
+    });
+    return saveQueue.current;
+  };
+  useEffect(() => {
+    if (!comment.draft || comment.replyStatus || comment.isHidden || !message.trim() || message === savedDraft.current) return;
+    const timer = setTimeout(() => { void saveDraft(message).catch((failure) => setError(failure instanceof Error ? failure.message : 'Could not save draft.')); }, 600);
+    return () => clearTimeout(timer);
+  }, [comment.draft, comment.isHidden, comment.replyStatus, message]);
+  if (comment.replyStatus === 'sent' || comment.replyStatus === 'user_confirmed') return null;
+  if (comment.replyStatus) return <div className="workspace-editor"><p role="alert">We couldn’t confirm your reply was sent. Check the platform first; new replies may take time to appear.</p>
+    {comment.replyMessage && <p>Attempted reply: {comment.replyMessage}</p>}
+    {comment.replyAttempt && <div className="workspace-reply-actions">{(['found', 'not_sent'] as const).map((resolution) => <Button key={resolution} type="button" variant="outline" disabled={busy} onClick={async () => {
+      setBusy(true); setError('');
+      try {
+        const response = await fetch(`/api/comments/${encodeURIComponent(comment.accountId)}/${encodeURIComponent(comment.id)}/reply/resolve`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resolution, attempt: comment.replyAttempt }),
+        });
+        const result = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(result.error || 'Could not resolve reply.');
+        onResolved(resolution === 'found' ? 'user_confirmed' : null);
+      } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not resolve reply.'); }
+      finally { setBusy(false); }
+    }}>{resolution === 'found' ? 'I found my reply' : 'I checked; it was not sent'}</Button>)}</div>}
+    {error && <p role="alert">{error}</p>}</div>;
   if (comment.isHidden) return null;
   if (!open) return <Button variant="outline" type="button" onClick={() => setOpen(true)}>Reply</Button>;
   return <form className="workspace-editor" onSubmit={async (event) => {
@@ -81,48 +161,40 @@ function ReplyComposer({ comment, onSent, onDismiss }: { comment: SavedComment; 
     setBusy(true);
     setError('');
     try {
+      await saveDraft(message);
       const response = await fetch(`/api/comments/${encodeURIComponent(comment.accountId)}/${encodeURIComponent(comment.id)}/reply`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }),
       });
-      const result = await response.json() as { status?: string; error?: string };
+      const result = await response.json() as { status?: string; error?: string; attempt?: string };
       if (!response.ok) {
-        if (result.error?.startsWith('Delivery unconfirmed')) onSent('unknown');
+        if (result.status === 'unknown') onSent('unknown', result.attempt, message.trim());
         throw new Error(result.error || 'Could not send reply');
       }
       onSent('sent');
       setOpen(false);
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not send reply'); }
     finally { setBusy(false); }
-  }}><label htmlFor={`reply-${comment.accountId}-${comment.id}`}>{comment.draft ? 'Suggested reply — review before sending' : comment.platform === 'youtube' && comment.parentId ? 'Reply in this YouTube thread' : `Reply to ${comment.author}`}</label>
-    <textarea id={`reply-${comment.accountId}-${comment.id}`} value={message} maxLength={2000} required onChange={(event) => { setMessage(event.target.value); setSaved(false); }} />
+  }}><label htmlFor={`reply-${comment.accountId}-${comment.id}`}>Your reply:</label>
+    <Textarea id={`reply-${comment.accountId}-${comment.id}`} value={message} maxLength={2000} required onChange={(event) => { setMessage(event.target.value); setError(''); setSaved(false); }} onBlur={() => { if (comment.draft && message.trim() && message !== savedDraft.current) void saveDraft(message).catch((failure) => setError(failure instanceof Error ? failure.message : 'Could not save draft.')); }} />
     <div className="workspace-reply-actions"><Button type="submit" disabled={busy || !message.trim()}>{busy ? 'Sending…' : 'Send reply'}</Button>
-      {comment.draft && <Button variant="outline" type="button" disabled={busy || !message.trim()} onClick={async () => {
-        setBusy(true); setError('');
-        try {
-          const response = await fetch(`/api/comments/${encodeURIComponent(comment.accountId)}/${encodeURIComponent(comment.id)}/draft`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draft: message }) });
-          if (!response.ok) throw new Error('Could not save draft. Refresh and try again.');
-          setSaved(true);
-        } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not save draft'); }
+      <Button variant="ghost" type="button" disabled={busy} onClick={async () => {
+        setBusy(true);
+        try { await saveDraft(message); setOpen(false); }
+        catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not save draft.'); }
         finally { setBusy(false); }
-      }}>Save draft</Button>}
-      {comment.draft && <Button variant="ghost" type="button" disabled={busy} onClick={async () => {
-        setBusy(true); setError('');
-        try {
-          const response = await fetch(`/api/drafts/${encodeURIComponent(comment.accountId)}/${encodeURIComponent(comment.id)}`, { method: 'DELETE' });
-          if (!response.ok) throw new Error('Could not dismiss draft.');
-          onDismiss();
-        } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not dismiss draft'); }
-        finally { setBusy(false); }
-      }}>Dismiss</Button>}
-      <Button variant="ghost" type="button" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button></div>
-    {saved && <small role="status">Draft saved</small>}
+      }}>Cancel</Button></div>
+    {comment.draft && (saving ? <small role="status">Saving draft…</small> : saved && <small role="status">Draft saved</small>)}
     {error && <p role="alert">{error}</p>}
   </form>;
 }
 
 export function Workspace() {
-  const [activeTab, setActiveTab] = useState<'all' | 'hidden' | 'replies'>('all');
-  const [user, setUser] = useState<User | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState(() => workspaceTab(location.pathname));
+  const [filter, setFilter] = useState<('hidden' | 'replies')[]>([]);
+  const [commentSort, setCommentSort] = useState<'newest' | 'oldest'>('newest');
+  const [postSort, setPostSort] = useState<'newest' | 'oldest'>('newest');
+  const [user, setUser] = useState<SignedInUser | null>(null);
   const [error, setError] = useState(false);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [connectionError, setConnectionError] = useState('');
@@ -135,13 +207,19 @@ export function Workspace() {
   const requestId = useRef(0);
 
   useEffect(() => {
+    const onPopState = () => setActiveTab(workspaceTab(location.pathname));
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
     fetch('/api/me').then(async (response) => {
       if (response.status === 401) {
         location.replace('/api/auth/google');
         return;
       }
       if (!response.ok) throw new Error('Unable to load session');
-      setUser(await response.json() as User);
+       setUser(await response.json() as SignedInUser);
       try {
         const accounts = await fetch('/api/zernio');
         if (!accounts.ok) throw new Error();
@@ -153,7 +231,7 @@ export function Workspace() {
     }).catch(() => setError(true));
   }, []);
 
-  useEffect(() => { if (user) { setComments([]); setNextCursor(null); void loadComments(undefined, activeTab); } }, [user, activeTab]);
+  useEffect(() => { if (user && activeTab !== 'settings') { setComments([]); setNextCursor(null); void loadComments(); } }, [user, activeTab, filter, commentSort, postSort]);
   useEffect(() => {
     if (!connection?.connected) return;
     void loadBackfill();
@@ -170,12 +248,12 @@ export function Workspace() {
     } catch { setBackfillError(true); }
   }
 
-  async function loadComments(cursor?: string, view = activeTab) {
+  async function loadComments(cursor?: string) {
     const request = ++requestId.current;
     setCommentsLoading(true);
     setCommentsError('');
     try {
-      const response = await fetch(`/api/comments?${new URLSearchParams({ view, ...(cursor ? { before: cursor } : {}) })}`);
+      const response = await fetch(`/api/comments?${new URLSearchParams({ view: activeTab === 'posts' ? ['posts', ...filter].join(',') : filter.length ? filter.join(',') : 'all', sort: activeTab === 'posts' ? postSort : commentSort, ...(cursor ? { before: cursor } : {}) })}`);
       if (!response.ok) throw new Error('Could not load saved comments');
       const page = await response.json() as { comments: SavedComment[]; nextCursor: string | null };
       if (request !== requestId.current) return;
@@ -194,73 +272,83 @@ export function Workspace() {
     } catch { setConnectionError('Could not disconnect Zernio. Try again.'); }
   }
 
-  const estimatedComments = backfill.reduce((sum, progress) => sum + progress.expectedComments, 0);
+  const currentSort = activeTab === 'posts' ? postSort : commentSort;
   return (
-    <div className="workspace">
-      <header className="workspace-header">
-        <a href="/" aria-label="Comment Lookout home"><Brand /></a>
-        {user && <>
-          <form id="workspace-sign-out" action="/api/auth/logout" method="post" />
-          <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-lg" className="rounded-full" aria-label="Account menu" />}>
-              <Avatar size="lg"><AvatarImage src={user.picture || undefined} alt="" referrerPolicy="no-referrer" /><AvatarFallback>{user.name.trim().charAt(0).toUpperCase() || '?'}</AvatarFallback></Avatar>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end"><DropdownMenuItem render={<button type="submit" form="workspace-sign-out" />}>Sign out</DropdownMenuItem></DropdownMenuContent>
-          </DropdownMenu>
-        </>}
-      </header>
-      <main className="workspace-main">
-        {error ? <Alert variant="destructive"><AlertDescription>We couldn't load your workspace. Refresh the page to try again.</AlertDescription></Alert> : !user || !connection ? <p role="status">Checking your session…</p> :
-          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'all' | 'hidden' | 'replies')} className="workspace-tabs">
-            <TabsList variant="line" className="workspace-nav" aria-label="Comment views">
-              <TabsTrigger value="all">All comments</TabsTrigger>
-              <TabsTrigger value="hidden">Hidden comments</TabsTrigger>
-              <TabsTrigger value="replies">Needs a reply</TabsTrigger>
-            </TabsList>
-            <TabsContent value={activeTab}>
-              <div className="workspace-heading">
-                <div><h1>{activeTab === 'all' ? 'All comments' : activeTab === 'hidden' ? 'Hidden comments' : 'Needs a reply'}</h1><p>{activeTab === 'hidden' ? 'Comments currently hidden on the platform, with a reason when known.' : activeTab === 'replies' ? 'AI-selected comments without a recorded reply. Review and send a draft yourself.' : 'Every saved comment, including unreviewed and historical ones.'}</p></div>
-                <Button variant="outline" size="icon-lg" type="button" aria-label="Refresh comments" title="Refresh comments" disabled={commentsLoading} onClick={() => loadComments()}><HugeiconsIcon icon={Refresh01Icon} /></Button>
+    <Tabs value={activeTab} onValueChange={(value) => { const tab = value as keyof typeof workspacePaths; history.pushState(null, '', workspacePaths[tab]); setActiveTab(tab); }} className="workspace gap-0">
+       <header className="workspace-header">
+          <a href="/api/auth/home" aria-label="Comment Lookout home"><Brand /></a>
+          <TabsList variant="line" className="workspace-nav" aria-label="Workspace views">
+             <TabsTrigger value="comments"><span>Comments</span></TabsTrigger>
+             <TabsTrigger value="posts"><span>Posts</span></TabsTrigger>
+             <TabsTrigger value="settings"><span>Settings</span></TabsTrigger>
+          </TabsList>
+          {user && <AccountMenu user={user} />}
+       </header>
+       <main className="workspace-main">
+         {error ? <Alert variant="destructive"><AlertDescription>We couldn't load your workspace. Refresh the page to try again.</AlertDescription></Alert> :
+             <>
+             {activeTab !== 'settings' && <TabsContent value={activeTab}>
+               <div className="workspace-heading">
+                   <h1>{activeTab === 'posts' ? 'Posts' : 'Comments'}</h1>
+                  <ToggleGroup multiple value={filter.length ? filter : ['all']} onValueChange={(values) => setFilter(filter.length && values.includes('all') ? [] : (['hidden', 'replies'] as const).filter((item) => values.includes(item)))} variant="outline" size="sm" aria-label={`Filter ${activeTab} by status`} className="workspace-filter-chips">
+                    <ToggleGroupItem value="all">All</ToggleGroupItem><ToggleGroupItem value="hidden">Hidden</ToggleGroupItem><ToggleGroupItem value="replies">Needs reply</ToggleGroupItem>
+                  </ToggleGroup>
+                  <div className="workspace-heading-actions">
+                   <DropdownMenu modal={false}>
+                     <DropdownMenuTrigger render={<button className="workspace-sort-trigger" type="button" aria-label={`Sort ${activeTab} by ${currentSort === 'newest' ? 'recent' : 'oldest'}`} />}><HugeiconsIcon icon={SortByDown01Icon} aria-hidden="true" />{currentSort === 'newest' ? 'Recent' : 'Oldest'}</DropdownMenuTrigger>
+                     <DropdownMenuContent align="end" className="w-[100px] min-w-0"><DropdownMenuGroup><DropdownMenuRadioGroup value={currentSort} onValueChange={(value) => { if (activeTab === 'posts') setPostSort(value as typeof postSort); else setCommentSort(value as typeof commentSort); }}><DropdownMenuRadioItem value="newest">Recent</DropdownMenuRadioItem><DropdownMenuRadioItem value="oldest">Oldest</DropdownMenuRadioItem></DropdownMenuRadioGroup></DropdownMenuGroup></DropdownMenuContent>
+                   </DropdownMenu>
+                   <Button variant="outline" type="button" disabled={commentsLoading} onClick={() => loadComments()}><HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" aria-hidden="true" />Refresh</Button></div>
               </div>
               {comments.length > 0 && <Card className="workspace-inbox">
-                <CardHeader className="workspace-inbox-head"><CardTitle>Comment</CardTitle><span>Post</span></CardHeader>
-                <CardContent className="workspace-inbox-content"><ul className="workspace-comment-list">{comments.map((comment) => <li key={`${comment.accountId}:${comment.id}`}>
-                  <div className="workspace-comment-body">
-                    <div className="workspace-comment-byline"><Avatar size="lg"><AvatarFallback>{comment.author.slice(0, 1).toUpperCase()}</AvatarFallback></Avatar><div><strong>{comment.author}</strong><small>{connection.accounts.find((account) => account.id === comment.accountId)?.username || comment.platform} · {comment.platform === 'instagram' ? 'Instagram' : 'YouTube'}{comment.parentId ? ' · Reply' : ''}</small></div></div>
-                     <p>{comment.message}</p><time dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleString()}</time>{comment.isHidden && <Badge variant="secondary">Hidden on platform</Badge>}{comment.isBackfill && <Badge variant="outline">Historical</Badge>}
-                     {activeTab === 'hidden' && <div className="workspace-assessment">{comment.category && ['spam', 'scam', 'profanity', 'suspicious_link'].includes(comment.category) ? <><Badge variant="secondary">{comment.category.replaceAll('_', ' ')}</Badge>{comment.reason && <span>{comment.reason}</span>}</> : <span>Reason unavailable</span>}</div>}
-                     {activeTab === 'hidden' && comment.platform === 'instagram' && <RestoreButton comment={comment} onRestored={() => setComments((current) => current.filter((item) => item.accountId !== comment.accountId || item.id !== comment.id))} />}
-                     {activeTab === 'all' && <div className="workspace-assessment">{!comment.category ? <span>Analysis pending</span> : comment.category !== 'safe' ? <><Badge variant="secondary">{comment.category.replaceAll('_', ' ')} · review</Badge>{comment.reason && <span>{comment.reason}</span>}</> : <span>Reviewed</span>}</div>}
+                  <CardContent className="workspace-inbox-content"><Table className={`workspace-comment-table${activeTab === 'posts' ? ' workspace-posts-table' : ''}`} aria-label={activeTab === 'posts' ? 'Comments grouped by post' : filter.length ? 'Filtered comments' : 'All comments'}>
+                    <TableHeader><TableRow><TableHead scope="col">Comment</TableHead>{activeTab === 'comments' && <TableHead scope="col">Post</TableHead>}<TableHead scope="col">Date</TableHead><TableHead scope="col">Status</TableHead></TableRow></TableHeader>
+                     <TableBody>{comments.map((comment, index) => <Fragment key={`${comment.accountId}:${comment.id}`}>{activeTab === 'posts' && (index === 0 || comments[index - 1].accountId !== comment.accountId || comments[index - 1].postId !== comment.postId) && <TableRow className="workspace-group-row"><TableCell colSpan={3}><div className="workspace-post"><span className="workspace-thumbnail">{comment.postPicture && <img src={comment.postPicture} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = 'none'; }} />}</span><div><strong>{comment.postContent || 'Post without a caption'}</strong><small>{comment.postCreatedAt ? `Posted ${new Date(comment.postCreatedAt).toLocaleDateString()}` : 'Post date unavailable'}</small></div></div></TableCell></TableRow>}<TableRow className="workspace-comment-row" tabIndex={0} aria-label={`Comment by ${comment.author}`} aria-expanded={expanded === `${comment.accountId}:${comment.id}`} aria-controls={`comment-details-${comment.accountId}-${comment.id}`} onClick={() => setExpanded((current) => current === `${comment.accountId}:${comment.id}` ? null : `${comment.accountId}:${comment.id}`)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExpanded((current) => current === `${comment.accountId}:${comment.id}` ? null : `${comment.accountId}:${comment.id}`); } }}>
+                  <TableCell className="workspace-comment-body" data-label="Comment">
+                      <strong>{comment.author}</strong><p className={expanded === `${comment.accountId}:${comment.id}` ? 'workspace-comment-full' : 'workspace-truncate'}>{comment.message}</p>
+                  </TableCell>
+                    {activeTab === 'comments' && <TableCell className="workspace-post-cell" data-label="Post"><div className="workspace-post"><span className="workspace-thumbnail">{comment.postPicture && <img src={comment.postPicture} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = 'none'; }} />}</span><p className="workspace-truncate">{comment.postContent || 'Post without a caption'}</p></div></TableCell>}
+                    <TableCell data-label="Date"><time dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleDateString()}</time></TableCell>
+                    <TableCell data-label="Status"><div className="workspace-statuses">{(comment.visibilityUncertain || comment.isHidden || comment.moderationStatus === 'hide_unknown' || comment.moderationStatus === 'pending' || comment.moderationStatus === 'hiding' || !comment.category) && <Badge className={comment.visibilityUncertain || comment.moderationStatus === 'hide_unknown' ? 'workspace-status-check' : comment.isHidden ? 'workspace-status-hidden' : 'workspace-status-pending'}>{comment.visibilityUncertain ? 'Check visibility' : comment.isHidden ? 'Hidden' : comment.moderationStatus === 'hide_unknown' ? 'Check hide' : comment.moderationStatus === 'pending' || comment.moderationStatus === 'hiding' ? 'Hide pending' : 'Pending'}</Badge>}{comment.category && comment.category !== 'safe' && <Badge className="workspace-status-check">{comment.category.replaceAll('_', ' ')}</Badge>}{comment.replyStatus === 'sent' || comment.replyStatus === 'user_confirmed' ? <Badge className="workspace-status-replied">Replied</Badge> : comment.replyStatus ? <Badge className="workspace-status-check">Check reply</Badge> : comment.needsReply ? <Badge className="workspace-status-draft">Needs reply</Badge> : null}</div></TableCell>
+                   </TableRow><TableRow id={`comment-details-${comment.accountId}-${comment.id}`} hidden={expanded !== `${comment.accountId}:${comment.id}`} className="workspace-detail-row"><TableCell colSpan={activeTab === 'posts' ? 3 : 4} className="workspace-action-cell"><div className="workspace-detail-stack">
+                          <div className="workspace-detail-source"><Badge variant="outline" className="workspace-source-tag"><HugeiconsIcon icon={comment.platform === 'instagram' ? InstagramIcon : YoutubeIcon} aria-hidden="true" />{comment.platform}{comment.parentId ? ' · Reply' : ''}</Badge></div>
+                          <time className="workspace-detail-time" dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleTimeString()}</time>
+                      {comment.visibilityUncertain && <p role="status">Visibility needs checking on Instagram.</p>}
+                         {(!comment.category || comment.reason) && <p className="workspace-assessment">{comment.reason || 'Waiting for review'}</p>}
+                       {comment.isHidden && comment.platform === 'instagram' && <RestoreButton comment={comment} onRefresh={() => { void loadComments(); }} onRestored={() => { void loadComments(); }} />}
                      {comment.moderationStatus === 'pending' && <p role="status">Hide pending. We’ll retry.</p>}
-                     {activeTab === 'replies' && !comment.draft && <p role="status">Draft pending. Refresh to check again.</p>}
-                     {activeTab !== 'hidden' && <ReplyComposer key={comment.draft || 'manual'} comment={comment} onDismiss={() => setComments((current) => activeTab === 'replies' ? current.filter((item) => item.accountId !== comment.accountId || item.id !== comment.id) : current.map((item) => item.accountId === comment.accountId && item.id === comment.id ? { ...item, draft: null } : item))} onSent={(status) => setComments((current) => activeTab === 'replies' && status === 'sent' ? current.filter((item) => item.accountId !== comment.accountId || item.id !== comment.id) : current.map((item) => item.accountId === comment.accountId && item.id === comment.id ? { ...item, replyStatus: status } : item))} />}
-                  </div>
-                  <aside><span>On this post</span><p>{comment.postContent || 'Post without a caption'}</p></aside>
-                </li>)}</ul></CardContent>
+                     {comment.moderationStatus === 'hiding' && <p role="status">Hiding…</p>}
+                     {comment.moderationStatus === 'hide_unknown' && <HideRecovery comment={comment} onRefresh={() => { void loadComments(); }} />}
+                       {activeTab === 'comments' && filter.includes('replies') && comment.needsReply && !comment.draft && <p role="status">Draft pending. Refresh to check again.</p>}
+                        {(activeTab === 'posts' || filter.length !== 1 || filter[0] !== 'hidden') && <ReplyComposer key={comment.draft || 'manual'} comment={comment} onResolved={() => { void loadComments(); }} onSent={(status, attempt, message) => setComments((current) => activeTab === 'comments' && filter.includes('replies') && status === 'sent' ? current.filter((item) => item.accountId !== comment.accountId || item.id !== comment.id) : current.map((item) => item.accountId === comment.accountId && item.id === comment.id ? { ...item, replyStatus: status, replyAttempt: attempt ?? null, replyMessage: message ?? null, needsReply: false } : item))} />}
+                   </div></TableCell>
+                </TableRow></Fragment>)}</TableBody></Table></CardContent>
               </Card>}
-               {!commentsLoading && !commentsError && comments.length === 0 && <Empty className="workspace-empty-note"><EmptyHeader><EmptyTitle><h2>No comments here yet</h2></EmptyTitle><EmptyDescription>{activeTab === 'all' ? connection.connected ? 'We’re scanning up to three recent posts per account and watching new posts. Zernio may take up to 10 minutes to show new comments. Only comments from the past 90 days are retained.' : 'Connect Zernio to start scanning comments.' : activeTab === 'hidden' ? 'No saved comments are hidden on the platform.' : 'No comments need a manual reply right now.'}</EmptyDescription></EmptyHeader></Empty>}
-              {commentsLoading && <div className="workspace-loading" role="status" aria-label="Loading comments"><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /></div>}
+                 {connection && !commentsLoading && !commentsError && comments.length === 0 && <Empty className="workspace-empty-note"><EmptyHeader><EmptyTitle><h2>{filter.length === 1 && filter[0] === 'hidden' ? 'No hidden comments' : filter.length === 1 && filter[0] === 'replies' ? 'No replies to review' : filter.length ? 'No matching comments' : activeTab === 'posts' ? 'No posts yet' : 'No comments yet'}</h2></EmptyTitle><EmptyDescription>{filter.length ? filter.length > 1 ? 'No comments match the selected statuses.' : filter[0] === 'hidden' ? 'Hidden comments will appear here when available.' : 'Comments selected for a reply will appear here.' : connection.connected ? 'We’re scanning recent posts. New comments can take up to 10 minutes to appear.' : connectionError ? 'Check your Zernio connection and try again.' : 'Connect Zernio to start seeing your comments.'}</EmptyDescription></EmptyHeader></Empty>}
+              {commentsLoading && <div className="workspace-loading" role="status" aria-label="Loading comments"><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /></div>}
               {commentsError && <Alert variant="destructive"><AlertDescription>{commentsError} <Button variant="outline" type="button" onClick={() => loadComments(nextCursor || undefined)}>Retry</Button></AlertDescription></Alert>}
                {nextCursor && !commentsError && <Button className="workspace-load-more" variant="outline" type="button" disabled={commentsLoading} onClick={() => loadComments(nextCursor)}>Load more</Button>}
-               {activeTab === 'all' && <Card className="workspace-next">
-                <CardHeader><CardTitle><h2>{connection.connected ? 'Your accounts' : 'Connect Zernio'}</h2></CardTitle><CardDescription>{connection.connected ? 'Instagram and YouTube accounts connected through Zernio.' : 'Sign in as your Zernio team owner to connect your accounts.'}</CardDescription></CardHeader>
+              </TabsContent>}
+              {activeTab === 'settings' && <TabsContent value="settings">
+                <div className="workspace-heading"><h1>Settings</h1></div>
+                {user && connection ? <Card id="accounts" className="workspace-next">
+                <CardHeader><CardTitle><h2>{connection.connected ? 'Your accounts' : 'Connect Zernio'}</h2></CardTitle><CardDescription>{connection.connected ? 'Social media accounts connected through Zernio. We monitor all new posts. We also scan up to three most recent posts per account. Comments are kept for 90 days.' : 'Sign in as your Zernio team owner to connect your accounts.'}</CardDescription></CardHeader>
                   <CardContent>
-                     {connection.connected && <Alert className="workspace-backfill"><AlertDescription>Historical scan starts automatically. {backfill.length ? `Estimated volume: ${estimatedComments} comments across up to three recent posts per account.` : 'Estimating comment volume…'} OpenAI analyzes saved comments and may generate drafts, which incurs API charges. Comments older than 90 days are not retained.</AlertDescription></Alert>}
                     {connection.connected ? connection.accounts.length ? <ul className="workspace-accounts">{connection.accounts.map((account) => <li key={account.id}>
                     <Avatar size="lg"><AvatarImage src={account.profilePicture || undefined} alt={`${account.username} profile picture`} referrerPolicy="no-referrer" /><AvatarFallback><HugeiconsIcon icon={account.platform === 'instagram' ? InstagramIcon : YoutubeIcon} aria-hidden="true" /></AvatarFallback></Avatar>
                       <span><strong>{account.username}</strong><small>{account.platform}</small></span>
                        <p className="workspace-backfill-status">{backfillStatus(backfill.find((item) => item.accountId === account.id))}</p>
                        <ModerationSetting account={account} initial={connection.moderation?.[account.id]} />
-                  </li>)}</ul> : <p>No Instagram or YouTube accounts connected yet. <a href="https://zernio.com" target="_blank" rel="noopener noreferrer">Connect one in Zernio</a>, then refresh this page.</p> : <a className={buttonVariants()} href="/api/zernio/connect">Connect Zernio</a>}
-                  {connectionError && <Alert variant="destructive"><AlertDescription>{connectionError}</AlertDescription></Alert>}
+                  </li>)}</ul> : <p>No Instagram or YouTube accounts connected yet. <a href="https://zernio.com" target="_blank" rel="noopener noreferrer">Connect one in Zernio</a>, then refresh this page.</p> : !connectionError && <a className={buttonVariants()} href="/api/zernio/connect">Connect Zernio</a>}
+                  {connectionError && <Alert variant="destructive"><AlertDescription>{connectionError} <Button variant="outline" type="button" onClick={() => location.reload()}>Retry</Button></AlertDescription></Alert>}
                   {backfillError && <p role="alert">Could not load scan progress. <Button variant="outline" type="button" onClick={() => loadBackfill()}>Retry</Button></p>}
                 </CardContent>
-                 <CardFooter className="workspace-account-footer"><p>{connection.connected ? 'Replies post only after you click Send reply.' : 'Read-only monitoring begins when you connect.'}</p>{connection.connected && <Button variant="outline" type="button" onClick={disconnect}>Disconnect Zernio</Button>}</CardFooter>
-               </Card>}
-            </TabsContent>
-            <p className="workspace-session">Signed in as {user.email}</p>
-          </Tabs>}
-      </main>
-    </div>
+                 <CardFooter className="workspace-account-footer">{connection.connected ? <Button variant="outline" type="button" onClick={disconnect}><HugeiconsIcon icon={LinkOffIcon} data-icon="inline-start" aria-hidden="true" />Disconnect Zernio</Button> : <p>Read-only monitoring begins when you connect.</p>}</CardFooter>
+                </Card> : <div className="workspace-loading" role="status" aria-label="Loading settings"><Skeleton className="h-56 w-full" /><Skeleton className="h-36 w-full" /></div>}
+              </TabsContent>}
+             </>}
+       </main>
+       <SiteFooter />
+    </Tabs>
   );
 }

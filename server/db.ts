@@ -162,6 +162,12 @@ db.exec(`
   );
 `);
 db.exec("DELETE FROM brand_voices WHERE account_id = '*'");
+if (!db.prepare('PRAGMA table_info(monitored_posts)').all().some((column) => (column as { name: string }).name === 'picture')) {
+  db.exec('ALTER TABLE monitored_posts ADD COLUMN picture TEXT');
+}
+if (!db.prepare('PRAGMA table_info(monitored_posts)').all().some((column) => (column as { name: string }).name === 'created_at')) {
+  db.exec('ALTER TABLE monitored_posts ADD COLUMN created_at TEXT');
+}
 if (!db.prepare('PRAGMA table_info(users)').all().some((column) => (column as { name: string }).name === 'picture')) {
   db.exec('ALTER TABLE users ADD COLUMN picture TEXT');
 }
@@ -170,6 +176,31 @@ if (!db.prepare('PRAGMA table_info(comment_assessments)').all().some((column) =>
 }
 if (!db.prepare('PRAGMA table_info(moderation_preferences)').all().some((column) => (column as { name: string }).name === 'backfill_confirmed')) {
   db.exec('ALTER TABLE moderation_preferences ADD COLUMN backfill_confirmed INTEGER NOT NULL DEFAULT 0');
+}
+if (!db.prepare('PRAGMA table_info(comment_replies)').all().some((column) => (column as { name: string }).name === 'started_at')) {
+  db.exec('ALTER TABLE comment_replies ADD COLUMN started_at INTEGER');
+}
+if (!db.prepare('PRAGMA table_info(moderation_jobs)').all().some((column) => (column as { name: string }).name === 'restore_token')) {
+  db.exec('ALTER TABLE moderation_jobs ADD COLUMN restore_token TEXT');
+}
+db.exec("UPDATE moderation_jobs SET restore_token = lower(hex(randomblob(16))) WHERE status = 'restore_pending' AND restore_token IS NULL");
+if (!db.prepare('PRAGMA table_info(moderation_jobs)').all().some((column) => (column as { name: string }).name === 'restore_started_at')) {
+  db.exec('ALTER TABLE moderation_jobs ADD COLUMN restore_started_at INTEGER');
+}
+if (!db.prepare('PRAGMA table_info(moderation_jobs)').all().some((column) => (column as { name: string }).name === 'action_at')) {
+  db.exec('ALTER TABLE moderation_jobs ADD COLUMN action_at TEXT');
+}
+if (!db.prepare('PRAGMA table_info(moderation_jobs)').all().some((column) => (column as { name: string }).name === 'visibility_uncertain')) {
+  db.exec('ALTER TABLE moderation_jobs ADD COLUMN visibility_uncertain INTEGER NOT NULL DEFAULT 0');
+}
+if (!db.prepare('PRAGMA table_info(moderation_jobs)').all().some((column) => (column as { name: string }).name === 'observed_at')) {
+  db.exec('ALTER TABLE moderation_jobs ADD COLUMN observed_at TEXT');
+}
+if (!db.prepare('PRAGMA table_info(moderation_jobs)').all().some((column) => (column as { name: string }).name === 'claim_token')) {
+  db.exec('ALTER TABLE moderation_jobs ADD COLUMN claim_token TEXT');
+}
+if (!db.prepare('PRAGMA table_info(moderation_jobs)').all().some((column) => (column as { name: string }).name === 'claim_expires_at')) {
+  db.exec('ALTER TABLE moderation_jobs ADD COLUMN claim_expires_at INTEGER');
 }
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');

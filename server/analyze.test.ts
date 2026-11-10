@@ -19,7 +19,7 @@ test('only safe comments get drafts; jobs retry, isolate workspaces and preserve
   for (const session of [alice, bob]) {
     db.prepare('INSERT INTO zernio_connections VALUES (?, ?, ?, ?, ?)').run(session.user.id, session.user.id, 'token', 'token', 9999999999);
     db.prepare('INSERT INTO monitored_accounts VALUES (?, ?, ?, ?)').run(session.user.id, account, 'instagram', new Date().toISOString());
-    db.prepare('INSERT INTO monitored_posts VALUES (?, ?, ?, ?, 0)').run(session.user.id, account, 'post', 'Caption');
+    db.prepare('INSERT INTO monitored_posts (user_id, account_id, post_id, content, pending) VALUES (?, ?, ?, ?, 0)').run(session.user.id, account, 'post', 'Caption');
     db.prepare('INSERT INTO synced_comments VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0)')
       .run(session.user.id, account, 'post', session === alice ? 'question' : 'link', session === alice ? 'Can you help?' : 'Visit https://bad.example', 'Visitor', new Date().toISOString());
   }
@@ -93,7 +93,7 @@ test('classifies without drafting neutral, unsafe, hidden or already answered co
   const account = '999999999999999999999999';
   db.prepare('INSERT INTO zernio_connections VALUES (?, ?, ?, ?, ?)').run(user.id, 'cases-owner', 'token', 'token', 9999999999);
   db.prepare('INSERT INTO monitored_accounts VALUES (?, ?, ?, ?)').run(user.id, account, 'instagram', new Date().toISOString());
-  db.prepare('INSERT INTO monitored_posts VALUES (?, ?, ?, ?, 0)').run(user.id, account, 'post', 'Caption');
+  db.prepare('INSERT INTO monitored_posts (user_id, account_id, post_id, content, pending) VALUES (?, ?, ?, ?, 0)').run(user.id, account, 'post', 'Caption');
   for (const id of ['neutral', 'spam', 'hidden', 'answered', 'question']) {
     db.prepare('INSERT INTO synced_comments VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)')
       .run(user.id, account, 'post', id, id, 'Visitor', new Date().toISOString(), Number(id === 'hidden'));

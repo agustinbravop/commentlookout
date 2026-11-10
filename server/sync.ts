@@ -2,23 +2,45 @@ import { db } from './db';
 import { accessToken, ownerId, zernioGet } from './zernio';
 
 type Account = { _id: string; platform: string };
-type Post = { id: string; accountId: string; platform: string; content?: string; createdTime?: string; commentCount: number };
-type NativePost = { id: string; platform: string; message: string; createdTime: string; commentCount: number };
+type Post = { id: string; accountId: string; platform: string; content?: string; picture?: unknown; createdTime?: string; commentCount: number };
+type NativePost = { id: string; platform: string; message: string; picture?: unknown; createdTime: string; commentCount: number };
 type Comment = {
   id: string; message: string; createdTime: string; from?: { name?: string; isOwner?: boolean };
   isHidden?: boolean; replyCount?: number; replies?: Comment[];
 };
 const cutoff = () => new Date(Date.now() - 90 * 86400_000).toISOString();
+function pictureUrl(value: unknown) {
+  if (typeof value !== 'string' || value.length > 4096) return null;
+  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && url.hostname.includes('.') && !url.hostname.endsWith('.local') && !/^[\d.]+$/.test(url.hostname) ? url.href : null; }
+  catch { return null; }
+}
 const connected = (userId: string, owner: string) => !!db.prepare('SELECT 1 FROM zernio_connections WHERE user_id = ? AND owner_id = ?').get(userId, owner);
 
 async function discoverBackfill(userId: string, owner: string, token: string, account: Account) {
   db.prepare('INSERT OR IGNORE INTO backfill_accounts VALUES (?, ?, 0)').run(userId, account._id);
   const state = db.prepare('SELECT selected FROM backfill_accounts WHERE user_id = ? AND account_id = ?')
     .get(userId, account._id) as { selected: number };
-  if (state.selected) return;
+  if (state.selected && !db.prepare(`SELECT 1 FROM backfill_posts b JOIN monitored_posts p USING (user_id, account_id, post_id)
+    WHERE b.user_id = ? AND b.account_id = ? AND (p.picture IS NULL OR p.created_at IS NULL) LIMIT 1`).get(userId, account._id)) return;
   const listed = await zernioGet(token, `/accounts/${encodeURIComponent(account._id)}/posts`) as { status?: string; posts?: NativePost[] };
   if (listed.status !== 'success' || !Array.isArray(listed.posts)) throw new Error('Could not list recent posts');
-  const recent = [...listed.posts].sort((a, b) => Date.parse(b.createdTime) - Date.parse(a.createdTime))
+  const posts = listed.posts;
+  if (state.selected) {
+    db.transaction(() => {
+      if (!connected(userId, owner)) return;
+      const save = db.prepare(`UPDATE monitored_posts SET picture = COALESCE(picture, ?), created_at = COALESCE(created_at, ?)
+        WHERE user_id = ? AND account_id = ? AND post_id = ?
+        AND EXISTS (SELECT 1 FROM backfill_posts WHERE user_id = ? AND account_id = ? AND post_id = ?)`);
+      for (const post of posts) {
+        if (!post.id || post.platform !== account.platform) continue;
+        const picture = pictureUrl(post.picture);
+        const createdAt = Number.isFinite(Date.parse(post.createdTime)) ? new Date(post.createdTime).toISOString() : null;
+        if (picture || createdAt) save.run(picture, createdAt, userId, account._id, post.id, userId, account._id, post.id);
+      }
+    })();
+    return;
+  }
+  const recent = [...posts].sort((a, b) => Date.parse(b.createdTime) - Date.parse(a.createdTime))
     .filter((post, index, posts) => posts.findIndex((item) => item.id === post.id) === index).slice(0, 3);
   if (recent.some((post) => !post.id || post.platform !== account.platform || !Number.isFinite(Date.parse(post.createdTime)) ||
       typeof post.message !== 'string' || !Number.isSafeInteger(post.commentCount) || post.commentCount < 0)) throw new Error('Invalid recent posts');
@@ -26,9 +48,9 @@ async function discoverBackfill(userId: string, owner: string, token: string, ac
     if (!connected(userId, owner)) return;
     const selectedAt = new Date().toISOString();
     for (const post of recent) {
-      db.prepare(`INSERT INTO monitored_posts VALUES (?, ?, ?, ?, 1)
-        ON CONFLICT(user_id, account_id, post_id) DO UPDATE SET content = excluded.content, pending = 1`)
-        .run(userId, account._id, post.id, post.message);
+      db.prepare(`INSERT INTO monitored_posts (user_id, account_id, post_id, content, pending, picture, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT(user_id, account_id, post_id) DO UPDATE SET content = excluded.content, picture = COALESCE(excluded.picture, picture), created_at = COALESCE(excluded.created_at, created_at), pending = 1`)
+        .run(userId, account._id, post.id, post.message, pictureUrl(post.picture), new Date(post.createdTime).toISOString());
       db.prepare('INSERT OR IGNORE INTO backfill_posts VALUES (?, ?, ?, ?, ?, NULL)')
         .run(userId, account._id, post.id, post.commentCount, selectedAt);
     }
@@ -59,9 +81,9 @@ async function syncAccount(userId: string, owner: string, token: string, account
       if (post.accountId !== account._id || post.platform !== account.platform ||
           !post.createdTime || !Number.isFinite(Date.parse(post.createdTime)) ||
           Date.parse(post.createdTime) < Date.parse(startedAt) || !post.id || post.commentCount <= 0) continue;
-      db.prepare(`INSERT INTO monitored_posts VALUES (?, ?, ?, ?, 1)
-        ON CONFLICT(user_id, account_id, post_id) DO UPDATE SET content = excluded.content, pending = 1`)
-        .run(userId, account._id, post.id, post.content ?? null);
+      db.prepare(`INSERT INTO monitored_posts (user_id, account_id, post_id, content, pending, picture, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT(user_id, account_id, post_id) DO UPDATE SET content = excluded.content, picture = COALESCE(excluded.picture, picture), created_at = COALESCE(excluded.created_at, created_at), pending = 1`)
+        .run(userId, account._id, post.id, post.content ?? null, pictureUrl(post.picture), new Date(post.createdTime).toISOString());
     }
     if (feed.pagination?.hasMore && (!feed.pagination.nextCursor || feed.pagination.nextCursor === cursor)) throw new Error('Invalid post cursor');
     cursor = feed.pagination?.hasMore ? feed.pagination.nextCursor! : undefined;
@@ -88,7 +110,7 @@ async function retryPending(userId: string, owner: string, token: string, accoun
 async function syncThread(userId: string, owner: string, token: string, account: Account, postId: string) {
   const backfill = db.prepare('SELECT selected_at FROM backfill_posts WHERE user_id = ? AND account_id = ? AND post_id = ?')
     .get(userId, account._id, postId) as { selected_at: string } | null;
-  function savePage(comments: { comment: Comment; parentId: string | null }[]) {
+  function savePage(comments: { comment: Comment; parentId: string | null }[], lastUpdated?: string) {
     db.transaction(() => {
       if (!connected(userId, owner)) return;
       for (const { comment, parentId } of comments) {
@@ -102,12 +124,24 @@ async function syncThread(userId: string, owner: string, token: string, account:
             !Number.isFinite(Date.parse(comment.createdTime))) continue;
         const createdAt = new Date(comment.createdTime).toISOString();
         if (createdAt < cutoff()) continue;
+        const existing = db.prepare(`SELECT c.is_hidden, j.status, j.action_at, j.observed_at FROM synced_comments c LEFT JOIN moderation_jobs j USING (user_id, account_id, comment_id)
+          WHERE c.user_id = ? AND c.account_id = ? AND c.comment_id = ?`).get(userId, account._id, comment.id) as { is_hidden: number; status: string | null; action_at: string | null; observed_at: string | null } | null;
+        let hidden = comment.isHidden ? 1 : 0;
+        if (existing && ['done', 'restored', 'restore_pending', 'restore_unknown'].includes(existing.status || '')) {
+          const observed = Date.parse(lastUpdated || '');
+          const fresh = typeof comment.isHidden === 'boolean' && !!existing.action_at && Number.isFinite(observed) && observed > Date.parse(existing.action_at) && (!existing.observed_at || observed > Date.parse(existing.observed_at));
+          const unsettled = existing.status === 'restore_pending' || existing.status === 'restore_unknown';
+          if (!fresh || unsettled) {
+            db.prepare('UPDATE moderation_jobs SET visibility_uncertain = 1 WHERE user_id = ? AND account_id = ? AND comment_id = ?').run(userId, account._id, comment.id);
+            hidden = existing.is_hidden;
+          } else {
+            db.prepare('UPDATE moderation_jobs SET visibility_uncertain = 0, observed_at = ? WHERE user_id = ? AND account_id = ? AND comment_id = ?').run(new Date(observed).toISOString(), userId, account._id, comment.id);
+          }
+        }
         db.prepare(`INSERT INTO synced_comments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(user_id, account_id, comment_id) DO UPDATE SET
-            message = excluded.message, author = excluded.author, is_hidden = CASE WHEN EXISTS (
-              SELECT 1 FROM moderation_jobs j WHERE j.user_id = excluded.user_id AND j.account_id = excluded.account_id
-                AND j.comment_id = excluded.comment_id AND j.status = 'done') THEN 1 ELSE excluded.is_hidden END`)
-          .run(userId, account._id, postId, comment.id, parentId, comment.message, comment.from?.name || 'Commenter', createdAt, comment.isHidden ? 1 : 0);
+            message = excluded.message, author = excluded.author, is_hidden = excluded.is_hidden`)
+          .run(userId, account._id, postId, comment.id, parentId, comment.message, comment.from?.name || 'Commenter', createdAt, hidden);
         if (backfill && createdAt <= backfill.selected_at) db.prepare('INSERT OR IGNORE INTO backfill_comments VALUES (?, ?, ?)')
           .run(userId, account._id, comment.id);
       }
@@ -120,7 +154,7 @@ async function syncThread(userId: string, owner: string, token: string, account:
       if (commentId) query.set('commentId', commentId);
       if (cursor) query.set('cursor', cursor);
       const page = await zernioGet(token, `/inbox/comments/${encodeURIComponent(postId)}?${query}`) as {
-        comments?: Comment[]; pagination?: { hasMore?: boolean; cursor?: string | null };
+        comments?: Comment[]; pagination?: { hasMore?: boolean; cursor?: string | null }; meta?: { lastUpdated?: string };
       };
       if (!Array.isArray(page.comments)) throw new Error('Invalid comment page');
       const batch: { comment: Comment; parentId: string | null }[] = [];
@@ -128,7 +162,7 @@ async function syncThread(userId: string, owner: string, token: string, account:
         batch.push({ comment, parentId: commentId ?? null });
         if (!commentId) for (const reply of comment.replies ?? []) batch.push({ comment: reply, parentId: comment.id });
       }
-      savePage(batch);
+      savePage(batch, page.meta?.lastUpdated);
       if (!connected(userId, owner)) return;
       if (!commentId && account.platform === 'instagram') for (const comment of page.comments) {
         if ((comment.replyCount ?? 0) > (comment.replies?.length ?? 0)) await readPages(comment.id);

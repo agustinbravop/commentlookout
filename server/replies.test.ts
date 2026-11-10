@@ -14,7 +14,7 @@ function setup(sub: string, id: string) {
   const encrypted = Buffer.concat([iv, cipher.update('test-token'), cipher.final(), cipher.getAuthTag()]).toString('base64');
   db.prepare('INSERT INTO zernio_connections VALUES (?, ?, ?, ?, ?)').run(session.user.id, sub, encrypted, encrypted, Math.floor(Date.now() / 1000) + 3600);
   db.prepare('INSERT INTO monitored_accounts VALUES (?, ?, ?, ?)').run(session.user.id, id, 'instagram', new Date().toISOString());
-  db.prepare('INSERT INTO monitored_posts VALUES (?, ?, ?, ?, 0)').run(session.user.id, id, 'post', 'Caption');
+  db.prepare('INSERT INTO monitored_posts (user_id, account_id, post_id, content, pending) VALUES (?, ?, ?, ?, 0)').run(session.user.id, id, 'post', 'Caption');
   for (const commentId of ['fresh', 'answered', 'uncertain']) db.prepare('INSERT INTO synced_comments VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0)')
     .run(session.user.id, id, 'post', commentId, 'Hello?', 'Visitor', new Date().toISOString());
   return session;
@@ -75,4 +75,35 @@ test('ambiguous provider failure remains blocked and never auto-retries', async 
     expect(posts).toBe(1);
     expect(db.prepare('SELECT status FROM comment_replies WHERE user_id = ? AND comment_id = ?').get(alice.user.id, 'uncertain')).toEqual({ status: 'unknown' });
   } finally { globalThis.fetch = originalFetch; console.error = originalError; }
+});
+
+test('reply recovery requires an explicit owner decision and never sends', async () => {
+  const account = 'abababababababababababab';
+  const alice = setup('reply-recovery', account);
+  const bob = createSession('recovery-outsider', 'recovery@example.com', 'Outsider');
+  const insert = db.prepare(`INSERT INTO comment_replies (user_id, account_id, comment_id, message, idempotency_key, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  insert.run(alice.user.id, account, 'fresh', 'Attempted reply', 'attempt-one', 'pending', null);
+  insert.run(alice.user.id, account, 'answered', 'Other reply', 'attempt-two', 'unknown', null);
+  insert.run(alice.user.id, account, 'uncertain', 'In flight', 'attempt-three', 'pending', Math.floor(Date.now() / 1000));
+  const path = (id: string) => `/api/comments/${account}/${id}/reply/resolve`;
+  const request = (id: string, token: string, resolution: string, attempt: string, origin = 'http://localhost') => replies.request(path(id), {
+    method: 'POST', headers: { Cookie: `cl_session=${token}`, Origin: origin }, body: JSON.stringify({ resolution, attempt }),
+  });
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async (_input: RequestInfo | URL) => { calls++; return Response.json({}, { status: 500 }); }) as typeof fetch;
+  try {
+    const inbox = await (await zernio.request('/api/comments?view=all', { headers: { Cookie: `cl_session=${alice.token}` } })).json() as { comments: { id: string; replyMessage: string; replyAttempt: string }[] };
+    expect(inbox.comments.find((item) => item.id === 'fresh')).toMatchObject({ replyMessage: 'Attempted reply', replyAttempt: 'attempt-one' });
+    expect((await request('fresh', bob.token, 'found', 'attempt-one')).status).toBe(409);
+    expect((await request('fresh', alice.token, 'found', 'attempt-one', 'https://bad.example')).status).toBe(403);
+    expect((await replies.request(path('fresh'), { method: 'POST' })).status).toBe(401);
+    expect((await request('uncertain', alice.token, 'not_sent', 'attempt-three')).status).toBe(409);
+    expect((await request('fresh', alice.token, 'found', 'attempt-one')).status).toBe(200);
+    expect((await request('fresh', alice.token, 'not_sent', 'attempt-one')).status).toBe(409);
+    expect((await request('answered', alice.token, 'not_sent', 'attempt-two')).status).toBe(200);
+    expect(db.prepare('SELECT status, reply_id, message FROM comment_replies WHERE user_id = ? AND comment_id = ?').get(alice.user.id, 'fresh')).toEqual({ status: 'sent', reply_id: null, message: 'Attempted reply' });
+    expect(db.prepare('SELECT 1 FROM comment_replies WHERE user_id = ? AND comment_id = ?').get(alice.user.id, 'answered')).toBeNull();
+    expect(calls).toBe(0);
+  } finally { globalThis.fetch = original; }
 });
