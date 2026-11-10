@@ -6,6 +6,7 @@ COPY tsconfig*.json vite.config.ts index.html ./
 COPY server ./server
 COPY src ./src
 COPY public ./public
+COPY scripts ./scripts
 RUN bun run build
 
 FROM oven/bun:1.3.13
