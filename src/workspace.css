@@ -4,7 +4,6 @@
 .workspace-header .brand-lockup > span { display: none; }
 .workspace-header > form { display: none; }
 .workspace-header > [data-slot="dropdown-menu-trigger"] { justify-self: end; }
-.workspace-header .brand-period { color: var(--brand-accent); }
 .workspace-main { width: 100%; max-width: 1240px; flex: 1; margin: 0 auto; padding: 32px clamp(24px,5vw,72px) 100px; }
 .workspace-nav { height: auto; justify-content: flex-start; gap: clamp(6px,1.5vw,17.5px); }
 .workspace-nav [data-slot="tabs-trigger"] { flex: none; min-height: 40px; color: var(--muted-foreground); font-weight: 700; }

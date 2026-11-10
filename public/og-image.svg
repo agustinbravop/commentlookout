@@ -10,9 +10,9 @@
     <ellipse cx="13" cy="25" rx="11" ry="12.1"/><ellipse cx="35" cy="25" rx="11" ry="12.1"/>
     <ellipse cx="13" cy="25" rx="6" ry="6.6" fill="#fff9f4"/><ellipse cx="35" cy="25" rx="6" ry="6.6" fill="#fff9f4"/>
   </g>
-  <text x="146" y="108" font-family="DejaVu Sans, sans-serif" font-size="29" font-weight="bold" fill="#302c2a">comment lookout.</text>
-  <text x="70" y="290" font-family="DejaVu Sans, sans-serif" font-size="66" font-weight="bold" fill="#302c2a">Catch the junk.</text>
-  <text x="70" y="385" font-family="DejaVu Sans, sans-serif" font-size="64" font-weight="bold" fill="#d64b0f">Find the conversations.</text>
+  <text x="146" y="108" font-family="DejaVu Sans, sans-serif" font-size="29" font-weight="bold" fill="#302c2a">comment lookout</text>
+  <text x="70" y="290" font-family="DejaVu Sans, sans-serif" font-size="66" font-weight="bold" fill="#302c2a">Catch the junk</text>
+  <text x="70" y="385" font-family="DejaVu Sans, sans-serif" font-size="64" font-weight="bold" fill="#d64b0f">Find the conversations</text>
   <text x="73" y="478" font-family="DejaVu Sans, sans-serif" font-size="26" fill="#302c2a">Instagram comment moderation and replies, on your terms.</text>
   <rect x="70" y="552" width="1060" height="2" fill="#e8d4c7"/>
   <text x="73" y="589" font-family="DejaVu Sans, sans-serif" font-size="19" fill="#6b5c55">commentlookout.agusbravo.dev</text>

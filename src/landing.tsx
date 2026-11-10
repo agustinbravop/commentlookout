@@ -4,6 +4,8 @@ import { AccountMenu, type SignedInUser } from './account-menu';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { HugeiconsIcon } from '@hugeicons/react';
+import { Link01Icon, Message02Icon, Settings02Icon } from '@hugeicons/core-free-icons';
 
 export function Brand() {
   return <span className="brand-lockup" translate="no">
@@ -18,7 +20,7 @@ export function Brand() {
         <ellipse cx="35" cy="25" rx="6" ry="6.6" fill="#fff9f4" />
       </g>
     </svg>
-    <span>comment lookout<span className="brand-period">.</span></span>
+    <span>comment lookout</span>
   </span>;
 }
 
@@ -37,16 +39,27 @@ export function App() {
     }).then(setUser).catch(() => { if (!controller.signal.aborted) setUser(null); });
     return () => controller.abort();
   }, []);
+  useEffect(() => {
+    if (!('IntersectionObserver' in window)) return;
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) if (entry.isIntersecting) {
+        entry.target.classList.add('is-entering');
+        observer.unobserve(entry.target);
+      }
+    }, { threshold: 0.2 });
+    document.querySelectorAll('.site .story h2, .site .story .step, .site .workspace-intro, .site .closing h2, .site .closing a').forEach((element) => observer.observe(element));
+    return () => observer.disconnect();
+  }, []);
   return <div className="site">
     <a className="skip-link" href="#top">Skip to content</a>
     <header className="site-header">
-       <a href="/" aria-label="Comment Lookout home"><Brand /></a>
+       <a href="/api/auth/home" aria-label="Comment Lookout home"><Brand /></a>
        {user ? <AccountMenu user={user} /> : user === null ? <a className={cn(buttonVariants({ variant: 'outline', size: 'lg' }), 'header-action')} href="/api/auth/start">Get Started</a> : null}
     </header>
 
     <main id="top" tabIndex={-1}>
       <section className="hero" aria-labelledby="hero-title">
-        <h1 id="hero-title">We hide spam comments.<br /><span>You reply to the ones that matter.</span></h1>
+        <h1 id="hero-title"><span className="hero-first">We hide spam comments,</span><span>you reply to the ones that matter</span></h1>
         <p>Keep your Instagram comment sections clean. After you confirm, we automatically hide clear spam so you can send replies to meaningful comments in your own words.</p>
         <div className="hero-actions"><a className={buttonVariants({ size: 'lg' })} href="/api/auth/start">Get Started</a></div>
       </section>
@@ -54,9 +67,9 @@ export function App() {
       <section className="story" id="how-it-works" aria-labelledby="story-title">
         <h2 id="story-title">Get started in one minute</h2>
         <div className="steps">
-          <Card className="step"><CardHeader><span className="step-number">1</span><CardTitle><h3>Connect Zernio</h3></CardTitle></CardHeader><CardContent><p>Sign in and connect your Zernio team. Your social accounts stay managed there.</p></CardContent></Card>
-          <Card className="step"><CardHeader><span className="step-number">2</span><CardTitle><h3>Set preferences</h3></CardTitle></CardHeader><CardContent><p>Turn on automatic hiding for spam, scams and comments with profanity.</p></CardContent></Card>
-          <Card className="step"><CardHeader><span className="step-number">3</span><CardTitle><h3>Reply</h3></CardTitle></CardHeader><CardContent><p>Respond to meaningful comments to stay connected to your audience.</p></CardContent></Card>
+          <Card className="step"><CardHeader><span className="step-icon"><HugeiconsIcon icon={Link01Icon} aria-hidden="true" /></span><CardTitle><h3>Connect Zernio</h3></CardTitle></CardHeader><CardContent><p>Sign in and connect your Zernio team. Your social accounts stay managed there.</p></CardContent></Card>
+          <Card className="step"><CardHeader><span className="step-icon"><HugeiconsIcon icon={Settings02Icon} aria-hidden="true" /></span><CardTitle><h3>Set preferences</h3></CardTitle></CardHeader><CardContent><p>Turn on automatic hiding for spam, scams and comments with profanity.</p></CardContent></Card>
+          <Card className="step"><CardHeader><span className="step-icon"><HugeiconsIcon icon={Message02Icon} aria-hidden="true" /></span><CardTitle><h3>Reply</h3></CardTitle></CardHeader><CardContent><p>Respond to meaningful comments to stay connected to your audience.</p></CardContent></Card>
         </div>
       </section>
 

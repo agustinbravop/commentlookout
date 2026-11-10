@@ -12,7 +12,7 @@ const workspace = html
   .replace(seo, '<meta name="robots" content="noindex" />')
   .replace('<title>Comment Lookout | Hide Instagram Spam & Reply to Comments</title>', '<title>Workspace | Comment Lookout</title>');
 const landing = html.replace(root, `<div id="root">${renderToString(createElement(App))}</div>`);
-if (!landing.includes('We hide spam comments.') || !landing.includes('rel="canonical"') ||
+if (!landing.includes('We hide spam comments') || !landing.includes('rel="canonical"') ||
     !workspace.includes('content="noindex"') || workspace.includes('rel="canonical"')) throw new Error('SEO prerender failed');
 await Bun.write('dist/app.html', workspace);
 await Bun.write('dist/index.html', landing);
