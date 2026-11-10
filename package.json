@@ -8,7 +8,7 @@
     "dev:web": "vite --host 0.0.0.0",
     "test": "bun test server/*.test.ts",
     "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
-    "build": "bun run check && vite build",
+    "build": "bun run check && vite build && bun scripts/prerender.ts",
     "start": "bun server/index.ts"
   },
   "dependencies": {

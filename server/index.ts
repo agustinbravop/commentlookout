@@ -15,9 +15,14 @@ app.route('/', zernio);
 app.route('/', replies);
 app.route('/', moderation);
 app.all('/api/*', (c) => c.notFound());
-app.get('/home', (c) => c.redirect(`/app${new URL(c.req.url).search}`, 302));
+app.get('/home', (c) => c.redirect(`/app${new URL(c.req.url).search}`, 301));
+app.get('/index.html', (c) => c.redirect('/', 301));
+app.get('/', serveStatic({ path: './dist/index.html' }));
+app.get('/app', (c, next) => { c.header('X-Robots-Tag', 'noindex'); return next(); }, serveStatic({ path: './dist/app.html' }));
+app.get('/app/posts', (c, next) => { c.header('X-Robots-Tag', 'noindex'); return next(); }, serveStatic({ path: './dist/app.html' }));
+app.get('/app/settings', (c, next) => { c.header('X-Robots-Tag', 'noindex'); return next(); }, serveStatic({ path: './dist/app.html' }));
 app.use('/*', serveStatic({ root: './dist' }));
-app.get('*', serveStatic({ path: './dist/index.html' }));
+app.get('*', (c) => c.notFound());
 
 Bun.serve({ fetch: app.fetch, port: Number(Bun.env.PORT || 3000), hostname: '0.0.0.0' });
 

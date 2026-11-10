@@ -47,6 +47,12 @@ bun run start  # serves the built frontend and API together on PORT (default 300
 
 `docker build -t comment-lookout .` builds the same single-service image. In Kubernetes, set the Google variables via a Secret and mount a persistent volume at `/app/data`. The image runs as the unprivileged `bun` user, so the volume must be writable by it. For the deployed URL, register the exact HTTPS callback in Google and set `GOOGLE_REDIRECT_URI` to it.
 
+## Public site and search
+
+The public landing page is pre-rendered at build time for `https://commentlookout.agusbravo.dev/`. The `/app` workspace routes serve a separate `noindex` shell; unknown routes return 404. `public/sitemap.xml` lists only the landing page, and `public/robots.txt` advertises it. Keep both the canonical URL and sitemap in sync if the domain changes. Configure HTTPS and redirects from any alternate hostnames at the ingress (outside this repository).
+
+After deployment, verify `https://commentlookout.agusbravo.dev/` in Google Search Console, submit `/sitemap.xml`, inspect the rendered landing page and check indexing/queries there. Search Console ownership and live indexing cannot be configured from this repository alone.
+
 ## Intended flow
 
 ```text

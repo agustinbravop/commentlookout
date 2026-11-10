@@ -40,14 +40,14 @@ export function App() {
   return <div className="site">
     <a className="skip-link" href="#top">Skip to content</a>
     <header className="site-header">
-       <a href="/api/auth/home" aria-label="Comment Lookout home"><Brand /></a>
+       <a href="/" aria-label="Comment Lookout home"><Brand /></a>
        {user ? <AccountMenu user={user} /> : user === null ? <a className={cn(buttonVariants({ variant: 'outline', size: 'lg' }), 'header-action')} href="/api/auth/start">Get Started</a> : null}
     </header>
 
     <main id="top" tabIndex={-1}>
       <section className="hero" aria-labelledby="hero-title">
         <h1 id="hero-title">We hide spam comments.<br /><span>You reply to the ones that matter.</span></h1>
-        <p>Keep your Instagram comment sections clean. We automatically remove the junk so you can send replies to meaningful comments in your own words.</p>
+        <p>Keep your Instagram comment sections clean. After you confirm, we automatically hide clear spam so you can send replies to meaningful comments in your own words.</p>
         <div className="hero-actions"><a className={buttonVariants({ size: 'lg' })} href="/api/auth/start">Get Started</a></div>
       </section>
 
