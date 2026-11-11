@@ -46,7 +46,7 @@
 .workspace-posts-table .workspace-detail-meta { grid-template-columns: minmax(0, 1fr) 105px 220px; }
 .workspace-posts-table .workspace-detail-source { grid-column: 1; }
 .workspace-posts-table .workspace-detail-time { grid-column: 2; }
-.workspace-posts-table .workspace-detail-meta .workspace-assessment { grid-column: 1 / -1; grid-row: 2; }
+.workspace-posts-table .workspace-detail-meta .workspace-assessment { grid-column: 1; grid-row: 1; }
 .workspace-detail-stack .workspace-assessment, .workspace-detail-stack .workspace-editor { margin-top: 0; }
 .workspace-comment-byline { display: flex; align-items: center; gap: 11px; }
 .workspace-comment-byline strong { font-size: 14px; }
@@ -149,7 +149,7 @@
   .workspace-detail-meta, .workspace-posts-table .workspace-detail-meta { grid-template-columns: minmax(0, 1fr) auto; }
   .workspace-detail-source, .workspace-posts-table .workspace-detail-source { grid-column: 1; }
   .workspace-detail-time, .workspace-posts-table .workspace-detail-time { grid-column: 2; }
-  .workspace-detail-meta .workspace-assessment, .workspace-posts-table .workspace-detail-meta .workspace-assessment { grid-column: 1 / -1; grid-row: 2; }
+  .workspace-detail-meta .workspace-assessment { grid-column: 1 / -1; grid-row: 2; }
   .workspace-comment-table tbody tr:not(.workspace-detail-row) { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; padding: 14px; }
   .workspace-comment-table tbody tr:not(.workspace-detail-row) td { width: auto; margin: 0; padding: 0; border: 0; }
   .workspace-comment-table tbody tr:not(.workspace-detail-row) td::before { display: none; }
