@@ -20,6 +20,13 @@ db.exec(`
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS signup_notifications (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    delivered_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS signup_notifications_pending ON signup_notifications(next_attempt_at) WHERE delivered_at IS NULL;
   CREATE TABLE IF NOT EXISTS login_attempts (
     state_hash TEXT PRIMARY KEY,
     verifier TEXT NOT NULL,
@@ -218,7 +225,10 @@ export function finishLogin(state: string) {
   return attempt;
 }
 
-export function createSession(sub: string, email: string, name: string, picture: string | null = null) {
+export const signupNotificationsEnabled = () => Boolean(Bun.env.DISCORD_SIGNUP_WEBHOOK_URL)
+  && /^https:\/\/commentlookout\.agusbravo\.dev(?::443)?(?:\/|$)/.test(Bun.env.GOOGLE_REDIRECT_URI || '');
+
+export const createSession = db.transaction((sub: string, email: string, name: string, picture: string | null = null) => {
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now());
   const id = crypto.randomUUID();
   db.prepare(`INSERT INTO users (id, google_sub, email, name, created_at, picture) VALUES (?, ?, ?, ?, ?, ?)
@@ -228,8 +238,11 @@ export function createSession(sub: string, email: string, name: string, picture:
     .get(sub) as { id: string; email: string; name: string; picture: string | null };
   const token = newToken();
   db.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run(hash(token), user.id, now() + 60 * 60 * 24 * 7);
+  if (user.id === id && signupNotificationsEnabled()) {
+    db.prepare('INSERT INTO signup_notifications (user_id) VALUES (?)').run(user.id);
+  }
   return { token, user };
-}
+});
 
 export function getUser(token?: string) {
   if (!token) return null;

@@ -6,6 +6,7 @@ import { syncComments } from './sync';
 import { replies } from './replies';
 import { analyzeComments } from './analyze';
 import { moderateComments, moderation } from './moderate';
+import { sendSignupNotification } from './notifications';
 
 const app = new Hono();
 
@@ -47,3 +48,6 @@ async function runAnalysis() {
 }
 void runAnalysis();
 setInterval(() => { void runAnalysis(); }, 15_000);
+
+void sendSignupNotification();
+setInterval(() => { void sendSignupNotification(); }, 15_000);

@@ -47,6 +47,14 @@ bun run start  # serves the built frontend and API together on PORT (default 300
 
 `docker build -t comment-lookout .` builds the same single-service image. In Kubernetes, set the Google variables via a Secret and mount a persistent volume at `/app/data`. The image runs as the unprivileged `bun` user, so the volume must be writable by it. For the deployed URL, register the exact HTTPS callback in Google and set `GOOGLE_REDIRECT_URI` to it.
 
+## Discord signup alerts (optional)
+
+Create a private Discord server and a private `#comment-lookout` channel. In the channel's **Edit Channel → Integrations → Webhooks**, create a webhook named **Comment Lookout** and copy its URL. Store it only in the production API server's secret environment as `DISCORD_SIGNUP_WEBHOOK_URL`, then restart the existing service; no separate hosting or bot is needed. Never put the URL in client code or Git. Alerts require `GOOGLE_REDIRECT_URI` to have origin `https://commentlookout.agusbravo.dev`; missing configuration and local sign-ins do not enqueue alerts.
+
+Set the channel's notification settings to **All Messages** and enable Discord mobile push notifications (check server mute settings and mobile push inactivity settings too). The webhook sends the signup name, email, stored signup timestamp and Production label. These are personal data: restrict channel access and manage Discord retention separately. Deleting an app account removes its queue entry, not an already posted Discord message or a request already in flight.
+
+Only new users created while enabled enqueue an alert; returning users and historical accounts never cause a signup flood. SQLite persists pending deliveries across restarts. An independent worker sends one due alert every 15 seconds, with bounded exponential backoff, Discord rate-limit delays and a cooldown for revoked webhooks or invalid configuration. Delivery is at least once: a lost response can produce a duplicate. Keep one service replica; add queue claiming before scaling. Rotating/changing the webhook may send pending alerts to the new destination; rotate any leaked webhook. No live alert is sent as part of setup verification without separate approval.
+
 ## Public site and search
 
 The public landing page is pre-rendered at build time for `https://commentlookout.agusbravo.dev/`. The `/app` workspace routes serve a separate `noindex` shell; unknown routes return 404. `public/sitemap.xml` lists only the landing page, and `public/robots.txt` advertises it. Keep both the canonical URL and sitemap in sync if the domain changes. Configure HTTPS and redirects from any alternate hostnames at the ingress (outside this repository).
