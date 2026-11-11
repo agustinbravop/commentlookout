@@ -37,10 +37,10 @@
 .workspace-detail-stack { display: flex; flex-direction: column; gap: 12px; }
 .workspace-detail-stack > * { padding-inline: 10px; }
 .workspace-detail-stack > p { margin: 0; line-height: 1.5; }
-.workspace-detail-meta { display: grid; grid-template-columns: minmax(0, 1fr) 250px 105px 220px; align-items: start; gap: 6px 0; padding-inline: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
+.workspace-detail-meta { display: grid; grid-template-columns: minmax(0, 1fr) 250px 105px 220px; align-items: start; gap: 6px 0; padding-inline: 0; color: var(--muted-foreground); font-size: inherit; line-height: 1.5; }
 .workspace-detail-meta > * { padding-inline: 10px; }
 .workspace-detail-source { display: flex; grid-column: 2; grid-row: 1; }
-.workspace-source-tag { border: 0; padding: 0; background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 500; }
+.workspace-source-tag { border: 0; padding: 0; background: transparent; color: var(--muted-foreground); font-size: inherit; font-weight: 500; }
 .workspace-detail-time { grid-column: 3; grid-row: 1; white-space: nowrap; }
 .workspace-detail-meta .workspace-assessment { grid-column: 1; grid-row: 1; }
 .workspace-posts-table .workspace-detail-meta { grid-template-columns: minmax(0, 1fr) 105px 220px; }
@@ -68,10 +68,11 @@
 .workspace-account-footer p { margin: 0; color: var(--muted-foreground); }
 .workspace-assessment { margin: 0; max-width: 70ch; color: var(--muted-foreground); overflow-wrap: anywhere; }
 .workspace-editor { display: grid; gap: 8px; margin-top: 16px; min-width: 0; }
-.workspace-editor label { font-size: 13px; font-weight: 700; }
+.workspace-editor label { font-size: inherit; font-weight: 700; }
+.workspace-editor small { font-size: inherit; }
 .workspace-editor textarea { width: min(100%, 460px); min-width: min(100%, 460px); max-width: 100%; height: 96px; field-sizing: fixed; resize: none; overflow-y: auto; background: var(--card); border-color: var(--border); }
 .workspace-editor button { justify-self: start; }
-.workspace-editor p { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+.workspace-editor p { margin: 0; color: var(--muted-foreground); font-size: inherit; line-height: 1.5; }
 .workspace-editor p[role="alert"] { color: var(--destructive); }
 .workspace-reply-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .workspace-moderation { grid-column: 1 / -1; display: grid; gap: 12px; font-size: 13px; }
