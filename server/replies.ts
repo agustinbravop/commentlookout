@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
-import { db, getUser } from './db';
+import { accountPaused, db, getUser } from './db';
 import { accessToken, ownerId, zernioGet } from './zernio';
 
 type ThreadComment = { id: string; isHidden?: boolean; replyCount?: number; from?: { isOwner?: boolean }; replies?: ThreadComment[] };
@@ -48,6 +48,7 @@ replies.post('/api/comments/:accountId/:commentId/reply', async (c) => {
       postId: string; parentId: string | null; isHidden: number; platform: string; ownerId: string;
     } | null;
   if (!comment || !['instagram', 'youtube'].includes(comment.platform)) return c.json({ error: 'Comment not found in your connected account' }, 404);
+  if (accountPaused(user.id, accountId)) return c.json({ error: 'This account needs a connection check in Zernio. Nothing was sent.' }, 409);
   if (comment.isHidden) return c.json({ error: 'Unhide this comment before replying' }, 409);
   if (db.prepare('SELECT 1 FROM comment_replies WHERE user_id = ? AND account_id = ? AND comment_id = ?').get(user.id, accountId, commentId) ||
       db.prepare('SELECT 1 FROM owner_replies WHERE user_id = ? AND account_id = ? AND comment_id = ?').get(user.id, accountId, commentId))
@@ -73,7 +74,7 @@ replies.post('/api/comments/:accountId/:commentId/reply', async (c) => {
   const inserted = db.prepare(`INSERT OR IGNORE INTO comment_replies (user_id, account_id, comment_id, message, idempotency_key, status, started_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`)
     .run(user.id, accountId, commentId, body.message.trim(), key, Math.floor(Date.now() / 1000));
   if (!inserted.changes) return c.json({ error: 'This reply was already sent or its delivery needs checking' }, 409);
-  if (!db.prepare('SELECT 1 FROM zernio_connections WHERE user_id = ? AND owner_id = ?').get(user.id, comment.ownerId)) {
+  if (accountPaused(user.id, accountId) || !db.prepare('SELECT 1 FROM zernio_connections WHERE user_id = ? AND owner_id = ?').get(user.id, comment.ownerId)) {
     db.prepare('DELETE FROM comment_replies WHERE user_id = ? AND account_id = ? AND comment_id = ? AND status = ?')
       .run(user.id, accountId, commentId, 'pending');
     return c.json({ error: 'Zernio disconnected before sending. Nothing was sent.' }, 409);

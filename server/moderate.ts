@@ -1,7 +1,8 @@
-import { db, getUser } from './db';
+import { accountPaused, db, getUser } from './db';
 import { accessToken, ownerId, zernioGet } from './zernio';
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
+import { notifyWorkspace } from './events';
 
 export const moderation = new Hono();
 moderation.post('/api/comments/:accountId/:commentId/restore', async (c) => {
@@ -13,6 +14,7 @@ moderation.post('/api/comments/:accountId/:commentId/restore', async (c) => {
     JOIN monitored_accounts m USING (user_id, account_id) JOIN zernio_connections z ON z.user_id = c.user_id
     WHERE c.user_id = ? AND c.account_id = ? AND c.comment_id = ? AND c.is_hidden = 1`).get(user.id, accountId, commentId) as { post_id: string; platform: string; owner_id: string } | null;
   if (!comment || comment.platform !== 'instagram') return c.json({ error: 'Hidden Instagram comment not found' }, 404);
+  if (accountPaused(user.id, accountId)) return c.json({ error: 'This account needs a connection check in Zernio. Nothing was sent.' }, 409);
   let attempt: string | undefined;
   let claimed = false;
   try {
@@ -20,7 +22,7 @@ moderation.post('/api/comments/:accountId/:commentId/restore', async (c) => {
     if (!token || await ownerId(token) !== comment.owner_id) throw new Error('Connection changed');
     const accounts = await zernioGet(token, `/accounts?${new URLSearchParams({ search: accountId, platforms: 'instagram', status: 'connected', limit: '1' })}`) as { accounts?: { _id: string; platform: string }[] };
     if (!accounts.accounts?.some((account) => account._id === accountId && account.platform === 'instagram')) throw new Error('Account unavailable');
-    if (!db.prepare('SELECT 1 FROM zernio_connections WHERE user_id = ? AND owner_id = ?').get(user.id, comment.owner_id)) throw new Error('Connection changed');
+    if (accountPaused(user.id, accountId) || !db.prepare('SELECT 1 FROM zernio_connections WHERE user_id = ? AND owner_id = ?').get(user.id, comment.owner_id)) throw new Error('Connection changed');
     attempt = crypto.randomUUID();
     const claim = db.prepare(`INSERT INTO moderation_jobs (user_id, account_id, comment_id, status, restore_token, restore_started_at) VALUES (?, ?, ?, 'restore_pending', ?, ?)
       ON CONFLICT(user_id, account_id, comment_id) DO UPDATE SET status = 'restore_pending', restore_token = excluded.restore_token, restore_started_at = excluded.restore_started_at
@@ -105,6 +107,7 @@ export async function moderateComments() {
         user_id: string; account_id: string; comment_id: string; post_id: string; message: string; owner_id: string;
       }[];
   for (const job of jobs) {
+    if (accountPaused(job.user_id, job.account_id)) continue;
     const claim = crypto.randomUUID();
     const claimed = db.prepare(`UPDATE moderation_jobs SET status = 'hiding', claim_token = ?, claim_expires_at = ?
       WHERE user_id = ? AND account_id = ? AND comment_id = ? AND status = 'pending' AND next_attempt_at <= ?`).run(claim, Math.floor(Date.now() / 1000) + 60, job.user_id, job.account_id, job.comment_id, Math.floor(Date.now() / 1000));
@@ -115,7 +118,7 @@ export async function moderateComments() {
       if (!token || await ownerId(token) !== job.owner_id) throw new Error('Connection ownership changed');
       const listed = await zernioGet(token, `/accounts?${new URLSearchParams({ search: job.account_id, platforms: 'instagram', status: 'connected', limit: '1' })}`) as { accounts?: { _id: string; platform: string }[] };
       if (!listed.accounts?.some((account) => account._id === job.account_id && account.platform === 'instagram')) throw new Error('Account unavailable');
-      if (!db.prepare(`SELECT 1 FROM moderation_preferences p JOIN zernio_connections z ON z.user_id = p.user_id AND z.owner_id = p.owner_id
+      if (accountPaused(job.user_id, job.account_id) || !db.prepare(`SELECT 1 FROM moderation_preferences p JOIN zernio_connections z ON z.user_id = p.user_id AND z.owner_id = p.owner_id
         JOIN synced_comments c ON c.user_id = p.user_id AND c.account_id = p.account_id
         JOIN comment_assessments a ON a.user_id = c.user_id AND a.account_id = c.account_id AND a.comment_id = c.comment_id
         JOIN moderation_jobs j ON j.user_id = c.user_id AND j.account_id = c.account_id AND j.comment_id = c.comment_id
@@ -145,6 +148,6 @@ export async function moderateComments() {
       db.prepare("UPDATE moderation_jobs SET status = ?, next_attempt_at = ?, visibility_uncertain = ? WHERE user_id = ? AND account_id = ? AND comment_id = ? AND status = 'hiding' AND claim_token = ?")
         .run(dispatched ? 'hide_unknown' : 'pending', Math.floor(Date.now() / 1000) + 600, Number(dispatched), job.user_id, job.account_id, job.comment_id, claim);
       console.error('Comment moderation pending', { reason: error instanceof Error ? error.message : 'Unknown error' });
-    }
+    } finally { notifyWorkspace(job.user_id); }
   }
 }

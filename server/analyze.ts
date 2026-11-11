@@ -1,4 +1,5 @@
 import { db } from './db';
+import { notifyWorkspace } from './events';
 
 type Job = {
   user_id: string; account_id: string; comment_id: string; message: string;
@@ -71,6 +72,7 @@ export async function analyzeComments() {
           AND EXISTS (SELECT 1 FROM zernio_connections z WHERE z.user_id = ?)`).run(job.message, category, decision.reason, Number(needsReply), Number(needsReply),
             job.user_id, job.account_id, job.comment_id, job.user_id, job.account_id, job.comment_id, job.message, job.user_id);
         if (!updated.changes) continue;
+        notifyWorkspace(job.user_id);
       }
       if (needsReply && !job.draft && db.prepare(`SELECT 1 FROM synced_comments c JOIN comment_assessments a USING (user_id, account_id, comment_id)
         WHERE c.user_id = ? AND c.account_id = ? AND c.comment_id = ? AND c.message = ? AND c.is_hidden = 0 AND a.dismissed = 0
@@ -91,6 +93,6 @@ export async function analyzeComments() {
       db.prepare('UPDATE comment_assessments SET next_attempt_at = ? WHERE user_id = ? AND account_id = ? AND comment_id = ?')
         .run(Math.floor(Date.now() / 1000) + 60, job.user_id, job.account_id, job.comment_id);
       console.error('Comment analysis pending', { reason: error instanceof Error ? error.message : 'Unknown error' });
-    }
+    } finally { notifyWorkspace(job.user_id); }
   }
 }

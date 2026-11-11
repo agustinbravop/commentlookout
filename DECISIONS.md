@@ -18,6 +18,7 @@ Agreed during the product discussion on 9 November 2026. The interview is finish
 
 - Monitor comments on future Instagram and YouTube posts whether published via Zernio or directly on the platform, including replies in comment threads; skip comments by the connected account itself. Zernio's discovery of platform-native posts and YouTube comment delivery may be delayed.
 - Prefer Zernio webhooks; use light polling for platform gaps, account discovery (approximately every 10 minutes), and recovery. Persist and deduplicate incoming work before processing.
+- After OAuth, provision each workspace's webhooks automatically in the existing service: register inactive, verify a fresh signed test, then activate. Persist setup/retries in SQLite and resume on Kubernetes restarts; no per-workspace deployment commands or enablement variable. Normal OAuth requests the bundled `automations:write` permission through user consent; older grants requiring more permission must be personally reauthorized. Derive the public callback origin from the configured HTTPS Google redirect URL; localhost continues with polling.
 - New-post monitoring begins automatically. The per-social-account **automatic hide/reject toggle defaults on**, but automatic actions cannot begin until the user sees the setting and confirms onboarding.
 - Automatically scan **every comment and reply** on up to the three most recent posts **per social account**; accounts with zero, one, or two posts are fine. No separate approval is required for scanning. Run it paginated in the background with visible progress and an expected-volume/cost warning; there is no silent comment cap. After explicit onboarding confirmation, clear violations in this backfill may be automatically hidden or rejected; uncertain cases remain review-only.
 
@@ -33,6 +34,7 @@ Agreed during the product discussion on 9 November 2026. The interview is finish
 ## Implementation and data
 
 - One Dockerized TypeScript service: React/Vite frontend, Bun/Hono API, SQLite-backed data and jobs via `bun:sqlite`, background worker in the same service, one Kubernetes replica with a persistent volume. Deploy using the homelab's GHCR/ArgoCD pattern.
+- SSE is a session-authenticated, workspace-scoped refresh signal in that same Bun process, not a comment transport or durable event log. The browser refetches existing APIs after a poke, reconnect or focus; automatic refresh waits for unsaved edits/in-flight actions. Keep one replica; shared notification delivery is required before scaling out.
 - OpenAI credits via a **server-side API key** are the default for AI tasks; evaluate specialist models only where they clearly help. No model runs on the cluster. Keep OAuth tokens and the OpenAI key off clients.
 - Retain moderation history, including comment text, for **365 days**. Keep unsent drafts until sent or dismissed. Encrypted off-cluster backups and user-customizable moderation prompts are **post-demo** work. The volume alone is not a backup.
 

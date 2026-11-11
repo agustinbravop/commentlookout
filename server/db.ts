@@ -168,6 +168,91 @@ db.exec(`
     FOREIGN KEY (user_id, account_id, comment_id) REFERENCES synced_comments(user_id, account_id, comment_id) ON DELETE CASCADE
   );
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS webhook_bindings (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES zernio_connections(user_id) ON DELETE CASCADE,
+    owner_id TEXT NOT NULL,
+    encrypted_secret TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1))
+  );
+  CREATE TABLE IF NOT EXISTS webhook_events (
+    binding_id TEXT NOT NULL REFERENCES webhook_bindings(id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    is_test INTEGER NOT NULL,
+    received_at INTEGER NOT NULL,
+    PRIMARY KEY (binding_id, event_id)
+  );
+  CREATE INDEX IF NOT EXISTS webhook_events_age ON webhook_events(received_at);
+  CREATE TABLE IF NOT EXISTS webhook_work (
+    binding_id TEXT NOT NULL REFERENCES webhook_bindings(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    generation INTEGER NOT NULL DEFAULT 1,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (binding_id, account_id, post_id)
+  );
+  CREATE TRIGGER IF NOT EXISTS webhook_owner_changed AFTER UPDATE OF owner_id ON zernio_connections
+  WHEN OLD.owner_id != NEW.owner_id BEGIN
+    DELETE FROM webhook_bindings WHERE user_id = NEW.user_id;
+  END;
+  CREATE TABLE IF NOT EXISTS webhook_account_state (
+    binding_id TEXT NOT NULL REFERENCES webhook_bindings(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('checking', 'disconnected', 'permissions_changed')),
+    PRIMARY KEY (binding_id, account_id)
+  );
+  CREATE TABLE IF NOT EXISTS webhook_setup (
+    binding_id TEXT PRIMARY KEY REFERENCES webhook_bindings(id) ON DELETE CASCADE,
+    callback_url TEXT NOT NULL DEFAULT '',
+    webhook_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'testing', 'active', 'reconnect', 'disabled')),
+    test_started_at INTEGER,
+    test_verified INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS webhook_cleanup (
+    binding_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    owner_id TEXT NOT NULL,
+    callback_url TEXT NOT NULL,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS webhook_setup_due ON webhook_setup(next_attempt_at);
+  CREATE INDEX IF NOT EXISTS webhook_cleanup_due ON webhook_cleanup(user_id, owner_id, next_attempt_at);
+  CREATE TRIGGER IF NOT EXISTS webhook_retired BEFORE DELETE ON webhook_bindings BEGIN
+    INSERT OR IGNORE INTO webhook_cleanup (binding_id, user_id, owner_id, callback_url)
+      SELECT OLD.id, OLD.user_id, OLD.owner_id, callback_url FROM webhook_setup
+      WHERE binding_id = OLD.id AND callback_url != '' AND EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id);
+  END;
+`);
+if (!db.prepare('PRAGMA table_info(webhook_work)').all().some((column) => (column as { name: string }).name === 'account_event')) {
+  db.exec('ALTER TABLE webhook_work ADD COLUMN account_event TEXT');
+}
+
+export function accountPaused(userId: string, accountId: string) {
+  return !!db.prepare(`SELECT 1 FROM webhook_account_state s JOIN webhook_bindings b ON b.id = s.binding_id
+    JOIN zernio_connections z ON z.user_id = b.user_id AND z.owner_id = b.owner_id
+    WHERE b.user_id = ? AND s.account_id = ? AND s.status IN ('checking', 'disconnected')`).get(userId, accountId);
+}
+
+export function queueWebhookSetup(userId: string, encryptedSecret: string) {
+  const connection = db.prepare('SELECT owner_id FROM zernio_connections WHERE user_id = ?').get(userId) as { owner_id: string } | null;
+  if (!connection) return;
+  let binding = db.prepare('SELECT id, enabled FROM webhook_bindings WHERE user_id = ? AND owner_id = ? ORDER BY rowid LIMIT 1')
+    .get(userId, connection.owner_id) as { id: string; enabled?: number } | null;
+  const disabled = binding?.enabled === 0;
+  if (!binding) {
+    binding = { id: crypto.randomUUID() };
+    db.prepare('INSERT INTO webhook_bindings (id, user_id, owner_id, encrypted_secret) VALUES (?, ?, ?, ?)')
+      .run(binding.id, userId, connection.owner_id, encryptedSecret);
+  }
+  db.prepare('INSERT OR IGNORE INTO webhook_setup (binding_id, status) VALUES (?, ?)').run(binding.id, disabled ? 'disabled' : 'pending');
+}
 db.exec("DELETE FROM brand_voices WHERE account_id = '*'");
 if (!db.prepare('PRAGMA table_info(monitored_posts)').all().some((column) => (column as { name: string }).name === 'picture')) {
   db.exec('ALTER TABLE monitored_posts ADD COLUMN picture TEXT');

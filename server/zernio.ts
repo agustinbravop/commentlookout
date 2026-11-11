@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import * as oauth from 'openid-client';
-import { db, getUser } from './db';
+import { db, getUser, queueWebhookSetup } from './db';
 
 const redirectUri = Bun.env.ZERNIO_REDIRECT_URI;
 const appOrigin = Bun.env.APP_ORIGIN;
@@ -15,13 +15,13 @@ const cookieOptions = { httpOnly: true, secure: redirectUri?.startsWith('https:/
 const now = () => Math.floor(Date.now() / 1000);
 const destination = () => appOrigin ? `${new URL(appOrigin).origin}/app` : '/app';
 
-function encrypt(value: string) {
+export function encrypt(value: string) {
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key!, iv);
   return Buffer.concat([iv, cipher.update(value), cipher.final(), cipher.getAuthTag()]).toString('base64');
 }
 
-function decrypt(value: string) {
+export function decrypt(value: string) {
   const bytes = Buffer.from(value, 'base64');
   const decipher = createDecipheriv('aes-256-gcm', key!, bytes.subarray(0, 12));
   decipher.setAuthTag(bytes.subarray(bytes.length - 16));
@@ -44,24 +44,40 @@ async function clientId() {
 }
 
 type Connection = { access_token: string; refresh_token: string; expires_at: number; owner_id: string };
+const tokenRequests = new Map<string, Promise<string | null>>();
 export async function accessToken(userId: string) {
+  const pending = tokenRequests.get(userId);
+  if (pending) return pending;
+  const request = readAccessToken(userId);
+  tokenRequests.set(userId, request);
+  try { return await request; }
+  finally { tokenRequests.delete(userId); }
+}
+
+async function readAccessToken(userId: string) {
   const connection = db.prepare('SELECT * FROM zernio_connections WHERE user_id = ?').get(userId) as Connection | null;
   if (!connection) return null;
   if (connection.expires_at > now() + 60) return decrypt(connection.access_token);
   const response = await fetch('https://zernio.com/api/oauth/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    method: 'POST', signal: AbortSignal.timeout(15_000), headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'refresh_token', client_id: await clientId(), refresh_token: decrypt(connection.refresh_token) }),
   });
-  if (!response.ok) throw new Error(`Zernio token refresh failed: ${response.status}`);
+  if (!response.ok) {
+    const failure = await response.json().catch(() => null) as { error?: unknown } | null;
+    throw Object.assign(new Error(`Zernio token refresh failed: ${response.status}`), {
+      status: response.status, code: failure?.error === 'invalid_grant' ? 'invalid_grant' : undefined,
+    });
+  }
   const tokens = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number };
   if (!tokens.access_token || !tokens.refresh_token || !tokens.expires_in) throw new Error('Incomplete Zernio token refresh');
-  db.prepare('UPDATE zernio_connections SET access_token = ?, refresh_token = ?, expires_at = ? WHERE user_id = ?')
-    .run(encrypt(tokens.access_token), encrypt(tokens.refresh_token), now() + tokens.expires_in, userId);
+  if (!db.prepare(`UPDATE zernio_connections SET access_token = ?, refresh_token = ?, expires_at = ?
+    WHERE user_id = ? AND owner_id = ? AND refresh_token = ?`)
+    .run(encrypt(tokens.access_token), encrypt(tokens.refresh_token), now() + tokens.expires_in, userId, connection.owner_id, connection.refresh_token).changes) throw new Error('Connection changed during token refresh');
   return tokens.access_token;
 }
 
 export async function zernioGet(token: string, path: string) {
-  const response = await fetch(`https://zernio.com/api/v1${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  const response = await fetch(`https://zernio.com/api/v1${path}`, { signal: AbortSignal.timeout(30_000), headers: { Authorization: `Bearer ${token}` } });
   if (!response.ok) {
     const body = await response.json().catch(() => null) as {
       code?: unknown;
@@ -91,6 +107,14 @@ export async function ownerId(token: string) {
   return owner._id;
 }
 
+function cleanupRetired(userId: string, connection: Connection | null) {
+  if (!connection || connection.expires_at <= now() + 30) return;
+  // Use only an already-valid token in memory; never retain old credentials for cleanup.
+  void import('./webhook-setup').then(({ cleanupWebhookSubscriptions }) =>
+    cleanupWebhookSubscriptions(userId, connection.owner_id, decrypt(connection.access_token)))
+    .catch(() => console.error('Zernio webhook cleanup pending'));
+}
+
 export const zernio = new Hono();
 zernio.use('*', async (c, next) => { await next(); c.header('Cache-Control', 'no-store'); });
 
@@ -106,7 +130,7 @@ zernio.get('/api/zernio/connect', async (c) => {
     const challenge = await oauth.calculatePKCECodeChallenge(verifier);
     const url = new URL('https://zernio.com/oauth/authorize');
     url.search = new URLSearchParams({ response_type: 'code', client_id: await clientId(), redirect_uri: redirectUri,
-      scope: 'accounts:read posts:read messaging:write' + (webhooks ? ' automations:write' : ''), state, code_challenge: challenge, code_challenge_method: 'S256' }).toString();
+      scope: 'accounts:read posts:read messaging:write automations:write', state, code_challenge: challenge, code_challenge_method: 'S256' }).toString();
     db.prepare('DELETE FROM zernio_attempts WHERE expires_at < ?').run(now());
     db.prepare('INSERT INTO zernio_attempts VALUES (?, ?, ?, ?)').run(Bun.CryptoHasher.hash('sha256', state, 'hex'), user.id, verifier, now() + 600);
     setCookie(c, 'cl_zernio_oauth', state, { ...cookieOptions, maxAge: 600 });
@@ -137,10 +161,17 @@ zernio.get('/api/zernio/callback', async (c) => {
     const owner = await ownerId(tokens.access_token);
     const occupied = db.prepare('SELECT user_id FROM zernio_connections WHERE owner_id = ?').get(owner) as { user_id: string } | null;
     if (occupied && occupied.user_id !== user.id) return c.text('This Zernio team is already connected to another workspace', 409);
-    db.prepare(`INSERT INTO zernio_connections VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(user_id) DO UPDATE SET owner_id = excluded.owner_id, access_token = excluded.access_token,
-      refresh_token = excluded.refresh_token, expires_at = excluded.expires_at`)
-      .run(user.id, owner, encrypt(tokens.access_token), encrypt(tokens.refresh_token), now() + tokens.expires_in);
+    const { access_token, refresh_token, expires_in } = tokens;
+    const previous = db.prepare('SELECT * FROM zernio_connections WHERE user_id = ?').get(user.id) as Connection | null;
+    db.transaction(() => {
+      db.prepare('DELETE FROM webhook_bindings WHERE user_id = ?').run(user.id);
+      db.prepare(`INSERT INTO zernio_connections VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET owner_id = excluded.owner_id, access_token = excluded.access_token,
+        refresh_token = excluded.refresh_token, expires_at = excluded.expires_at`)
+        .run(user.id, owner, encrypt(access_token), encrypt(refresh_token), now() + expires_in);
+      queueWebhookSetup(user.id, encrypt(randomBytes(32).toString('base64url')));
+    })();
+    cleanupRetired(user.id, previous);
     return c.redirect(destination());
   } catch {
     return c.text('Could not connect Zernio. Confirm that your Zernio account owns the team, then try again.', 502);
@@ -178,8 +209,12 @@ zernio.get('/api/zernio', async (c) => {
     } while (cursor);
     const voices = db.prepare("SELECT account_id, instructions FROM brand_voices WHERE user_id = ? AND account_id != '*'").all(user.id) as { account_id: string; instructions: string }[];
     const preferences = db.prepare('SELECT account_id, enabled FROM moderation_preferences WHERE user_id = ? AND owner_id = ? AND backfill_confirmed = 1').all(user.id, connected.owner_id) as { account_id: string; enabled: number }[];
+    const accountIssues = db.prepare(`SELECT s.account_id AS accountId, s.platform, s.status FROM webhook_account_state s
+      JOIN webhook_bindings b ON b.id = s.binding_id WHERE b.user_id = ? AND b.owner_id = ?`).all(user.id, connected.owner_id);
+    const webhook = db.prepare(`SELECT s.status FROM webhook_setup s JOIN webhook_bindings b ON b.id = s.binding_id
+      WHERE b.user_id = ? AND b.owner_id = ? ORDER BY b.rowid LIMIT 1`).get(user.id, connected.owner_id) ?? { status: 'pending' };
     return c.json({ connected: true, accounts, voices: Object.fromEntries(voices.map((voice) => [voice.account_id, voice.instructions])),
-      moderation: Object.fromEntries(preferences.map((preference) => [preference.account_id, !!preference.enabled])) });
+      moderation: Object.fromEntries(preferences.map((preference) => [preference.account_id, !!preference.enabled])), accountIssues, webhook });
   } catch {
     return c.json({ error: 'Could not read Zernio accounts. Reconnect Zernio if the problem continues.' }, 502);
   }
@@ -489,6 +524,8 @@ zernio.post('/api/zernio/disconnect', (c) => {
   if (c.req.header('origin') !== new URL(redirectUri || c.req.url).origin && c.req.header('origin') !== new URL(appOrigin || c.req.url).origin) return c.text('Invalid origin', 403);
   const user = getUser(getCookie(c, 'cl_session'));
   if (!user) return c.json({ error: 'Unauthenticated' }, 401);
+  const previous = db.prepare('SELECT * FROM zernio_connections WHERE user_id = ?').get(user.id) as Connection | null;
   db.prepare('DELETE FROM zernio_connections WHERE user_id = ?').run(user.id);
+  cleanupRetired(user.id, previous);
   return c.json({ connected: false });
 });

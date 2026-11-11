@@ -1,5 +1,6 @@
-import { db } from './db';
+import { accountPaused, db } from './db';
 import { accessToken, ownerId, zernioGet } from './zernio';
+import { notifyWorkspace } from './events';
 
 type Account = { _id: string; platform: string };
 type Post = { id: string; accountId: string; platform: string; content?: string; picture?: unknown; createdTime?: string; commentCount: number };
@@ -14,7 +15,7 @@ function pictureUrl(value: unknown) {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && url.hostname.includes('.') && !url.hostname.endsWith('.local') && !/^[\d.]+$/.test(url.hostname) ? url.href : null; }
   catch { return null; }
 }
-const connected = (userId: string, owner: string) => !!db.prepare('SELECT 1 FROM zernio_connections WHERE user_id = ? AND owner_id = ?').get(userId, owner);
+const connected = (userId: string, owner: string, accountId: string) => !accountPaused(userId, accountId) && !!db.prepare('SELECT 1 FROM zernio_connections WHERE user_id = ? AND owner_id = ?').get(userId, owner);
 
 async function discoverBackfill(userId: string, owner: string, token: string, account: Account) {
   db.prepare('INSERT OR IGNORE INTO backfill_accounts VALUES (?, ?, 0)').run(userId, account._id);
@@ -27,7 +28,7 @@ async function discoverBackfill(userId: string, owner: string, token: string, ac
   const posts = listed.posts;
   if (state.selected) {
     db.transaction(() => {
-      if (!connected(userId, owner)) return;
+      if (!connected(userId, owner, account._id)) return;
       const save = db.prepare(`UPDATE monitored_posts SET picture = COALESCE(picture, ?), created_at = COALESCE(created_at, ?)
         WHERE user_id = ? AND account_id = ? AND post_id = ?
         AND EXISTS (SELECT 1 FROM backfill_posts WHERE user_id = ? AND account_id = ? AND post_id = ?)`);
@@ -45,7 +46,7 @@ async function discoverBackfill(userId: string, owner: string, token: string, ac
   if (recent.some((post) => !post.id || post.platform !== account.platform || !Number.isFinite(Date.parse(post.createdTime)) ||
       typeof post.message !== 'string' || !Number.isSafeInteger(post.commentCount) || post.commentCount < 0)) throw new Error('Invalid recent posts');
   db.transaction(() => {
-    if (!connected(userId, owner)) return;
+    if (!connected(userId, owner, account._id)) return;
     const selectedAt = new Date().toISOString();
     for (const post of recent) {
       db.prepare(`INSERT INTO monitored_posts (user_id, account_id, post_id, content, pending, picture, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)
@@ -56,10 +57,11 @@ async function discoverBackfill(userId: string, owner: string, token: string, ac
     }
     db.prepare('UPDATE backfill_accounts SET selected = 1 WHERE user_id = ? AND account_id = ?').run(userId, account._id);
   })();
+  notifyWorkspace(userId);
 }
 
 async function syncAccount(userId: string, owner: string, token: string, account: Account) {
-  if (!connected(userId, owner)) return;
+  if (!connected(userId, owner, account._id)) return;
   db.prepare('INSERT OR IGNORE INTO monitored_accounts VALUES (?, ?, ?, ?)')
     .run(userId, account._id, account.platform, new Date().toISOString());
   const { started_at: startedAt } = db.prepare('SELECT started_at FROM monitored_accounts WHERE user_id = ? AND account_id = ?')
@@ -76,20 +78,21 @@ async function syncAccount(userId: string, owner: string, token: string, account
       meta?: { accountsFailed?: number };
     };
     if (!Array.isArray(feed.data) || feed.meta?.accountsFailed) throw new Error('Could not list posts');
-    if (!connected(userId, owner)) return;
+    if (!connected(userId, owner, account._id)) return;
     for (const post of feed.data) {
       if (post.accountId !== account._id || post.platform !== account.platform ||
           !post.createdTime || !Number.isFinite(Date.parse(post.createdTime)) ||
           Date.parse(post.createdTime) < Date.parse(startedAt) || !post.id || post.commentCount <= 0) continue;
       db.prepare(`INSERT INTO monitored_posts (user_id, account_id, post_id, content, pending, picture, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)
         ON CONFLICT(user_id, account_id, post_id) DO UPDATE SET content = excluded.content, picture = COALESCE(excluded.picture, picture), created_at = COALESCE(excluded.created_at, created_at), pending = 1`)
-        .run(userId, account._id, post.id, post.content ?? null, pictureUrl(post.picture), new Date(post.createdTime).toISOString());
+      .run(userId, account._id, post.id, post.content ?? null, pictureUrl(post.picture), new Date(post.createdTime).toISOString());
     }
+    notifyWorkspace(userId);
     if (feed.pagination?.hasMore && (!feed.pagination.nextCursor || feed.pagination.nextCursor === cursor)) throw new Error('Invalid post cursor');
     cursor = feed.pagination?.hasMore ? feed.pagination.nextCursor! : undefined;
   } while (cursor);
   } finally {
-    if (connected(userId, owner)) await retryPending(userId, owner, token, account);
+    if (connected(userId, owner, account._id)) await retryPending(userId, owner, token, account);
   }
 }
 
@@ -97,7 +100,7 @@ async function retryPending(userId: string, owner: string, token: string, accoun
   const pending = db.prepare('SELECT post_id FROM monitored_posts WHERE user_id = ? AND account_id = ? AND pending = 1')
     .all(userId, account._id) as { post_id: string }[];
   for (const post of pending) {
-    if (!connected(userId, owner)) break;
+    if (!connected(userId, owner, account._id)) break;
     try {
       await syncThread(userId, owner, token, account, post.post_id);
     } catch (error) {
@@ -112,7 +115,7 @@ async function syncThread(userId: string, owner: string, token: string, account:
     .get(userId, account._id, postId) as { selected_at: string } | null;
   function savePage(comments: { comment: Comment; parentId: string | null }[], lastUpdated?: string) {
     db.transaction(() => {
-      if (!connected(userId, owner)) return;
+      if (!connected(userId, owner, account._id)) return;
       for (const { comment, parentId } of comments) {
         if (comment.from?.isOwner) {
           if (parentId) db.prepare(`INSERT OR IGNORE INTO owner_replies
@@ -146,6 +149,7 @@ async function syncThread(userId: string, owner: string, token: string, account:
           .run(userId, account._id, comment.id);
       }
     })();
+    notifyWorkspace(userId);
   }
   async function readPages(commentId?: string) {
     let cursor: string | undefined;
@@ -163,7 +167,7 @@ async function syncThread(userId: string, owner: string, token: string, account:
         if (!commentId) for (const reply of comment.replies ?? []) batch.push({ comment: reply, parentId: comment.id });
       }
       savePage(batch, page.meta?.lastUpdated);
-      if (!connected(userId, owner)) return;
+      if (!connected(userId, owner, account._id)) return;
       if (!commentId && account.platform === 'instagram') for (const comment of page.comments) {
         if ((comment.replyCount ?? 0) > (comment.replies?.length ?? 0)) await readPages(comment.id);
       }
@@ -173,12 +177,13 @@ async function syncThread(userId: string, owner: string, token: string, account:
   }
   await readPages();
   db.transaction(() => {
-    if (!connected(userId, owner)) return;
+    if (!connected(userId, owner, account._id)) return;
     if (backfill) db.prepare('UPDATE backfill_posts SET completed_at = COALESCE(completed_at, ?) WHERE user_id = ? AND account_id = ? AND post_id = ?')
       .run(new Date().toISOString(), userId, account._id, postId);
     db.prepare('UPDATE monitored_posts SET pending = 0 WHERE user_id = ? AND account_id = ? AND post_id = ?')
       .run(userId, account._id, postId);
   })();
+  notifyWorkspace(userId);
 }
 
 export async function syncComments() {
@@ -197,6 +202,11 @@ export async function syncComments() {
         if (!Array.isArray(page.accounts)) throw new Error('Invalid accounts page');
         for (const account of page.accounts) {
           if (!['instagram', 'youtube'].includes(account.platform) || !/^[a-f\d]{24}$/i.test(account._id)) continue;
+          // A canonical healthy listing also recovers pauses when webhook intake is rolled back.
+          db.prepare(`DELETE FROM webhook_account_state WHERE account_id = ? AND binding_id IN
+            (SELECT id FROM webhook_bindings WHERE user_id = ? AND owner_id = ?)
+            AND (status = 'disconnected' OR binding_id IN (SELECT id FROM webhook_bindings WHERE enabled = 0))`)
+            .run(account._id, connection.user_id, connection.owner_id);
           try { await syncAccount(connection.user_id, connection.owner_id, token, account); }
           catch (error) { console.error('Zernio comment sync account pending', { platform: account.platform, reason: error instanceof Error ? error.message : 'Unknown error' }); }
         }
@@ -205,12 +215,60 @@ export async function syncComments() {
       } while (cursor);
     } catch (error) {
       console.error('Zernio comment sync connection pending', { reason: error instanceof Error ? error.message : 'Unknown error' });
-    }
+    } finally { notifyWorkspace(connection.user_id); }
   }
   archiveOldComments();
 }
 
+export async function syncWebhookWork() {
+  const jobs = db.prepare(`SELECT w.*, b.user_id, b.owner_id FROM webhook_work w JOIN webhook_bindings b ON b.id = w.binding_id
+    JOIN zernio_connections z ON z.user_id = b.user_id AND z.owner_id = b.owner_id
+    WHERE b.enabled = 1 AND w.next_attempt_at <= ? AND NOT EXISTS
+      (SELECT 1 FROM webhook_setup s WHERE s.binding_id = b.id AND s.status != 'active')
+    ORDER BY w.account_event IS NULL, w.next_attempt_at LIMIT 20`).all(Math.floor(Date.now() / 1000)) as {
+      binding_id: string; user_id: string; owner_id: string; account_id: string; platform: string; post_id: string; generation: number; account_event: string | null;
+    }[];
+  for (const job of jobs) {
+    const key = [job.binding_id, job.account_id, job.post_id];
+    try {
+      const token = await accessToken(job.user_id);
+      if (!token || await ownerId(token) !== job.owner_id) throw new Error('Connection ownership changed');
+      const listed = await zernioGet(token, `/accounts?${new URLSearchParams({ search: job.account_id, platforms: 'instagram,youtube', status: 'connected', limit: '1' })}`) as { accounts?: Account[] };
+      if (!Array.isArray(listed.accounts)) throw new Error('Invalid accounts page');
+      if (!db.prepare(`SELECT 1 FROM webhook_bindings b WHERE b.id = ? AND b.enabled = 1 AND NOT EXISTS
+        (SELECT 1 FROM webhook_setup s WHERE s.binding_id = b.id AND s.status != 'active')`).get(job.binding_id)) continue;
+      if (!db.prepare('SELECT 1 FROM webhook_work WHERE binding_id = ? AND account_id = ? AND post_id = ? AND generation = ?').get(...key, job.generation)) continue;
+      if (!listed.accounts.some((a) => a._id === job.account_id && a.platform === job.platform)) {
+        if (!job.account_event) throw new Error('Account ownership changed');
+        // A removed account may no longer be listable; only pause this workspace's known inventory.
+        if (db.prepare('SELECT 1 FROM monitored_accounts WHERE user_id = ? AND account_id = ? AND platform = ?').get(job.user_id, job.account_id, job.platform)) {
+          db.prepare(`INSERT INTO webhook_account_state VALUES (?, ?, ?, 'disconnected')
+            ON CONFLICT(binding_id, account_id) DO UPDATE SET status = 'disconnected'`).run(job.binding_id, job.account_id, job.platform);
+        }
+        db.prepare('DELETE FROM webhook_work WHERE binding_id = ? AND account_id = ? AND post_id = ? AND generation = ?').run(...key, job.generation);
+        continue;
+      }
+      if (job.account_event) {
+        db.prepare('DELETE FROM webhook_account_state WHERE binding_id = ? AND account_id = ?').run(job.binding_id, job.account_id);
+        if (job.account_event === 'account.permissions_changed') db.prepare("INSERT INTO webhook_account_state VALUES (?, ?, ?, 'permissions_changed')").run(job.binding_id, job.account_id, job.platform);
+      }
+      if (accountPaused(job.user_id, job.account_id)) throw new Error('Account check pending');
+      if (job.post_id) db.prepare('UPDATE monitored_posts SET pending = 1 WHERE user_id = ? AND account_id = ? AND post_id = ?').run(job.user_id, job.account_id, job.post_id);
+      await syncAccount(job.user_id, job.owner_id, token, { _id: job.account_id, platform: job.platform });
+      if (accountPaused(job.user_id, job.account_id)) throw new Error('Account check pending');
+      if (db.prepare('SELECT 1 FROM monitored_posts WHERE user_id = ? AND account_id = ? AND pending = 1').get(job.user_id, job.account_id)) throw new Error('Thread reads pending');
+      // A delivery arriving during a read must survive that read's completion.
+      db.prepare('DELETE FROM webhook_work WHERE binding_id = ? AND account_id = ? AND post_id = ? AND generation = ?').run(...key, job.generation);
+    } catch {
+      db.prepare('UPDATE webhook_work SET next_attempt_at = ? WHERE binding_id = ? AND account_id = ? AND post_id = ?')
+        .run(Math.floor(Date.now() / 1000) + 60, ...key);
+      console.error('Zernio webhook work pending');
+    } finally { notifyWorkspace(job.user_id); }
+  }
+}
+
 export function archiveOldComments() {
+  const affected = db.prepare('SELECT DISTINCT user_id FROM synced_comments WHERE created_at < ?').all(cutoff()) as { user_id: string }[];
   db.transaction(() => {
     db.prepare(`INSERT OR IGNORE INTO archived_drafts
       SELECT c.user_id, c.account_id, c.comment_id, a.draft FROM synced_comments c
@@ -220,4 +278,5 @@ export function archiveOldComments() {
         AND NOT EXISTS (SELECT 1 FROM owner_replies r WHERE r.user_id = c.user_id AND r.account_id = c.account_id AND r.comment_id = c.comment_id)`).run(cutoff());
     db.prepare('DELETE FROM synced_comments WHERE created_at < ?').run(cutoff());
   })();
+  for (const user of affected) notifyWorkspace(user.user_id);
 }

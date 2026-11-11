@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 
-test('explicit webhook consent preserves default scopes, PKCE and strict opt-in without network calls', () => {
+test('normal OAuth consent includes webhook management and preserves PKCE without network calls', () => {
   const result = Bun.spawnSync([process.execPath, '-e', `
     import assert from 'node:assert/strict';
     globalThis.fetch=()=>{throw new Error('Network forbidden');};
@@ -14,7 +14,7 @@ test('explicit webhook consent preserves default scopes, PKCE and strict opt-in 
       assert.equal(response.status,302);
       const url=new URL(response.headers.get('location'));
       assert.equal(url.origin+url.pathname,'https://zernio.com/oauth/authorize');
-      assert.equal(url.searchParams.get('scope'),'accounts:read posts:read messaging:write'+(query?' automations:write':''));
+       assert.equal(url.searchParams.get('scope'),'accounts:read posts:read messaging:write automations:write');
       assert.equal(url.searchParams.get('redirect_uri'),Bun.env.ZERNIO_REDIRECT_URI);
       assert.equal(url.searchParams.get('code_challenge_method'),'S256');
       const state=url.searchParams.get('state');

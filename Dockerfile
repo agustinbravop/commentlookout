@@ -17,6 +17,7 @@ RUN bun install --frozen-lockfile --production
 RUN mkdir -p /app/data && chown bun:bun /app/data
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
+COPY --from=build /app/scripts/zernio-webhook.ts ./scripts/zernio-webhook.ts
 USER bun
 EXPOSE 3000
 CMD ["bun", "run", "start"]
