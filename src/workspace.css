@@ -37,10 +37,16 @@
 .workspace-detail-stack { display: flex; flex-direction: column; gap: 12px; }
 .workspace-detail-stack > * { padding-inline: 10px; }
 .workspace-detail-stack > p { margin: 0; line-height: 1.5; }
-.workspace-detail-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
-.workspace-detail-source { display: flex; }
+.workspace-detail-meta { display: grid; grid-template-columns: minmax(0, 1fr) 250px 105px 220px; align-items: start; gap: 6px 0; padding-inline: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
+.workspace-detail-meta > * { padding-inline: 10px; }
+.workspace-detail-source { display: flex; grid-column: 2; grid-row: 1; }
 .workspace-source-tag { border: 0; padding: 0; background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 500; }
-.workspace-detail-time { white-space: nowrap; }
+.workspace-detail-time { grid-column: 3; grid-row: 1; white-space: nowrap; }
+.workspace-detail-meta .workspace-assessment { grid-column: 1; grid-row: 1; }
+.workspace-posts-table .workspace-detail-meta { grid-template-columns: minmax(0, 1fr) 105px 220px; }
+.workspace-posts-table .workspace-detail-source { grid-column: 1; }
+.workspace-posts-table .workspace-detail-time { grid-column: 2; }
+.workspace-posts-table .workspace-detail-meta .workspace-assessment { grid-column: 1 / -1; grid-row: 2; }
 .workspace-detail-stack .workspace-assessment, .workspace-detail-stack .workspace-editor { margin-top: 0; }
 .workspace-comment-byline { display: flex; align-items: center; gap: 11px; }
 .workspace-comment-byline strong { font-size: 14px; }
@@ -139,6 +145,10 @@
 .workspace-comment-table .workspace-detail-row[hidden] { display: none; }
 @media (max-width: 700px) {
   .workspace-posts-table colgroup { display: none; }
+  .workspace-detail-meta, .workspace-posts-table .workspace-detail-meta { grid-template-columns: minmax(0, 1fr) auto; }
+  .workspace-detail-source, .workspace-posts-table .workspace-detail-source { grid-column: 1; }
+  .workspace-detail-time, .workspace-posts-table .workspace-detail-time { grid-column: 2; }
+  .workspace-detail-meta .workspace-assessment, .workspace-posts-table .workspace-detail-meta .workspace-assessment { grid-column: 1 / -1; grid-row: 2; }
   .workspace-comment-table tbody tr:not(.workspace-detail-row) { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; padding: 14px; }
   .workspace-comment-table tbody tr:not(.workspace-detail-row) td { width: auto; margin: 0; padding: 0; border: 0; }
   .workspace-comment-table tbody tr:not(.workspace-detail-row) td::before { display: none; }
