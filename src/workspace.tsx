@@ -19,10 +19,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { commentThreads } from './comment-threads';
 import { postLabel } from './post-label';
+import { loadWindow, subscribeWorkspace } from './workspace-live';
 import './workspace.css';
 
 type Account = { id: string; platform: string; username: string; profilePicture: string | null };
-type Connection = { connected: boolean; accounts: Account[]; moderation?: Record<string, boolean> };
+type Connection = { connected: boolean; accounts: Account[]; moderation?: Record<string, boolean>; webhook?: { status: 'pending' | 'testing' | 'active' | 'reconnect' | 'disabled' } };
 type SavedComment = { id: string; accountId: string; platform: string; postId: string; postContent: string | null; postPicture: string | null; postCreatedAt: string | null; parentId: string | null; message: string; author: string; createdAt: string; isHidden: boolean; isBackfill: boolean; category: string | null; reason: string | null; draft: string | null; needsReply: boolean; replyStatus: string | null; replyMessage: string | null; replyAttempt: string | null; moderationStatus: string | null; restoreAttempt: string | null; hideAttempt: string | null; visibilityUncertain: boolean };
 type BackfillProgress = { accountId: string; selected: number; posts: number; completedPosts: number; expectedComments: number; savedComments: number };
 type SavedPost = { accountId: string; id: string; platform: string; content: string | null; picture: string | null; createdAt: string | null; commentCount: number; hiddenCount: number; needsReplyCount: number };
@@ -38,7 +39,9 @@ function ModerationSetting({ account, initial }: { account: Account; initial: bo
   const [confirmed, setConfirmed] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  return <form className="workspace-moderation" onSubmit={async (event) => {
+  const edited = useRef(false);
+  useEffect(() => { setConfirmed(initial); if (!edited.current) setEnabled(initial ?? true); }, [initial]);
+  return <form className="workspace-moderation" data-live-blocked={busy || edited.current} onSubmit={async (event) => {
     event.preventDefault();
     setBusy(true); setError('');
     try {
@@ -47,11 +50,11 @@ function ModerationSetting({ account, initial }: { account: Account; initial: bo
       });
       const result = await response.json() as { error?: string };
       if (!response.ok) throw new Error(result.error || 'Could not save your choice.');
-      setConfirmed(enabled);
+      edited.current = false; setConfirmed(enabled);
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not save your choice.'); }
     finally { setBusy(false); }
   }}>
-    <div className="workspace-moderation-choice"><Checkbox id={`moderation-${account.id}`} checked={enabled} disabled={busy} onCheckedChange={setEnabled} aria-describedby={`moderation-help-${account.id}`} />
+    <div className="workspace-moderation-choice"><Checkbox id={`moderation-${account.id}`} checked={enabled} disabled={busy} onCheckedChange={value => { edited.current = value !== (confirmed ?? true); setEnabled(value); }} aria-describedby={`moderation-help-${account.id}`} />
       <label htmlFor={`moderation-${account.id}`}>Auto-hide spam, scams and profanity comments</label></div>
     <p id={`moderation-help-${account.id}`}>Includes up to three recent posts.{account.platform === 'youtube' && ' YouTube moderation is not active yet.'}</p>
     <Button type="submit" variant="outline" disabled={busy || confirmed === enabled}>{busy ? 'Saving…' : confirmed === undefined ? 'Confirm choice' : 'Save choice'}</Button>
@@ -63,7 +66,7 @@ function ModerationSetting({ account, initial }: { account: Account; initial: bo
 function RestoreButton({ comment, onRestored, onRefresh }: { comment: SavedComment; onRestored: () => void; onRefresh: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  if (comment.moderationStatus === 'restore_pending' || comment.moderationStatus === 'restore_unknown') return <div className="workspace-editor"><p role="alert">Restoration is unconfirmed. Check Instagram before deciding.</p>
+  if (comment.moderationStatus === 'restore_pending' || comment.moderationStatus === 'restore_unknown') return <div className="workspace-editor" data-live-blocked={busy}><p role="alert">Restoration is unconfirmed. Check Instagram before deciding.</p>
     {comment.restoreAttempt && <div className="workspace-reply-actions">{(['restored', 'hidden'] as const).map((resolution) => <Button key={resolution} type="button" variant="outline" disabled={busy} onClick={async () => {
       setBusy(true); setError('');
       try {
@@ -77,7 +80,7 @@ function RestoreButton({ comment, onRestored, onRefresh }: { comment: SavedComme
       finally { setBusy(false); }
     }}>{resolution === 'restored' ? 'I checked; it is visible' : 'I checked; it is still hidden'}</Button>)}</div>}
     {error && <p role="alert">{error}</p>}</div>;
-  return <div className="workspace-editor"><Button variant="outline" type="button" disabled={busy} onClick={async () => {
+  return <div className="workspace-editor" data-live-blocked={busy}><Button variant="outline" type="button" disabled={busy} onClick={async () => {
     setBusy(true); setError('');
     try {
       const response = await fetch(`/api/comments/${encodeURIComponent(comment.accountId)}/${encodeURIComponent(comment.id)}/restore`, { method: 'POST' });
@@ -93,7 +96,7 @@ function RestoreButton({ comment, onRestored, onRefresh }: { comment: SavedComme
 function HideRecovery({ comment, onRefresh }: { comment: SavedComment; onRefresh: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  return <div className="workspace-editor"><p role="alert">Hide unconfirmed. Check Instagram. If still visible, choosing that option allows automatic retry.</p>
+  return <div className="workspace-editor" data-live-blocked={busy}><p role="alert">Hide unconfirmed. Check Instagram. If still visible, choosing that option allows automatic retry.</p>
     {comment.hideAttempt && <div className="workspace-reply-actions">{(['hidden', 'visible'] as const).map((resolution) => <Button key={resolution} type="button" variant="outline" disabled={busy} onClick={async () => {
       setBusy(true); setError('');
       try {
@@ -120,6 +123,15 @@ function ReplyComposer({ comment, onSent, onResolved }: { comment: SavedComment;
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const latestMessage = useRef(message);
   latestMessage.current = message;
+  const serverDraft = useRef(comment.draft || '');
+  useEffect(() => {
+    const previous = serverDraft.current;
+    serverDraft.current = comment.draft || '';
+    if (!busy && !saving && latestMessage.current === previous && savedDraft.current === previous) {
+      savedDraft.current = serverDraft.current;
+      setMessage(comment.replyMessage || serverDraft.current);
+    }
+  }, [comment.draft, comment.replyMessage]);
   // shortcut: manual replies remain local until sent; persist them if they must survive a refresh.
   const saveDraft = (draft: string) => {
     if (!comment.draft) return saveQueue.current;
@@ -142,7 +154,7 @@ function ReplyComposer({ comment, onSent, onResolved }: { comment: SavedComment;
     return () => clearTimeout(timer);
   }, [comment.draft, comment.isHidden, comment.replyStatus, message]);
   if (comment.replyStatus === 'sent' || comment.replyStatus === 'user_confirmed') return null;
-  if (comment.replyStatus) return <div className="workspace-editor"><p role="alert">We couldn’t confirm your reply was sent. Check the platform first; new replies may take time to appear.</p>
+  if (comment.replyStatus) return <div className="workspace-editor" data-live-blocked={busy}><p role="alert">We couldn’t confirm your reply was sent. Check the platform first; new replies may take time to appear.</p>
     {comment.replyMessage && <p>Attempted reply: {comment.replyMessage}</p>}
     {comment.replyAttempt && <div className="workspace-reply-actions">{(['found', 'not_sent'] as const).map((resolution) => <Button key={resolution} type="button" variant="outline" disabled={busy} onClick={async () => {
       setBusy(true); setError('');
@@ -159,7 +171,7 @@ function ReplyComposer({ comment, onSent, onResolved }: { comment: SavedComment;
     {error && <p role="alert">{error}</p>}</div>;
   if (comment.isHidden) return null;
   if (!open) return <Button variant="outline" type="button" onClick={() => setOpen(true)}>Reply</Button>;
-  return <form className="workspace-editor" onSubmit={async (event) => {
+  return <form className="workspace-editor" data-live-blocked={busy || saving || (!!message.trim() && message !== savedDraft.current)} onSubmit={async (event) => {
     event.preventDefault();
     setBusy(true);
     setError('');
@@ -223,43 +235,46 @@ function CommentsTable({ comments, showPost = true, onRefresh, onSent, repliesFi
         {comment.moderationStatus === 'pending' && <p role="status">Hide pending. We’ll retry.</p>}
         {comment.moderationStatus === 'hiding' && <p role="status">Hiding…</p>}
         {comment.moderationStatus === 'hide_unknown' && <HideRecovery comment={comment} onRefresh={onRefresh} />}
-        {repliesFilter && comment.needsReply && !comment.draft && <p role="status">Draft pending. Refresh to check again.</p>}
-        {!hiddenOnly && <ReplyComposer key={comment.draft || 'manual'} comment={comment} onResolved={onRefresh} onSent={(status, attempt, message) => onSent(comment, status, attempt, message)} />}
+        {repliesFilter && comment.needsReply && !comment.draft && <p role="status">Draft pending. It will appear when ready.</p>}
+        {!hiddenOnly && <ReplyComposer comment={comment} onResolved={onRefresh} onSent={(status, attempt, message) => onSent(comment, status, attempt, message)} />}
       </div></TableCell></TableRow></Fragment>;
     })}</TableBody></Table>;
 }
 
-function PostComments({ post }: { post: SavedPost }) {
+function PostComments({ post, liveRefresh, open }: { post: SavedPost; liveRefresh: number; open: boolean }) {
   const [comments, setComments] = useState<SavedComment[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const requestId = useRef(0);
   const retryCursor = useRef<string | undefined>(undefined);
-  async function load(before?: string) {
+  const busy = useRef(false), again = useRef(false), count = useRef(0), firstLive = useRef(true);
+  async function load(before?: string, background = false) {
+    if (background && busy.current) { again.current = true; return; }
     const request = ++requestId.current;
+    busy.current = true;
     retryCursor.current = before;
     setLoading(true); setError('');
     try {
-      const response = await fetch(`/api/comments?${new URLSearchParams({ accountId: post.accountId, postId: post.id, sort: 'oldest', ...(before ? { before } : {}) })}`);
-      if (!response.ok) throw new Error();
-      const page = await response.json() as { comments: SavedComment[]; nextCursor: string | null };
+      const page = await loadWindow<SavedComment>(`/api/comments?${new URLSearchParams({ accountId: post.accountId, postId: post.id, sort: 'oldest', ...(before ? { before } : {}) })}`, 'comments', background ? count.current : 0);
       if (request !== requestId.current) return;
-      setComments(current => before ? [...current, ...page.comments] : page.comments); setCursor(page.nextCursor);
+      count.current = before ? count.current + page.rows.length : page.rows.length;
+      setComments(current => before ? [...current, ...page.rows] : page.rows); setCursor(page.nextCursor);
     } catch { if (request === requestId.current) setError('Could not load this post’s comments.'); }
-    finally { if (request === requestId.current) setLoading(false); }
+    finally { if (request === requestId.current) { busy.current = false; setLoading(false); if (again.current) { again.current = false; void load(undefined, true); } } }
   }
   useEffect(() => { void load(); return () => { requestId.current++; }; }, [post.accountId, post.id]);
-  return <div className="workspace-post-comments">
+  useEffect(() => { if (firstLive.current) { firstLive.current = false; return; } if (open) void load(undefined, true); }, [liveRefresh, open]);
+  return <div className="workspace-post-comments" data-live-blocked={loading}>
     {comments.length > 0 && <CommentsTable comments={comments} showPost={false} onRefresh={() => { void load(); }} onSent={(comment, status, attempt, message) => setComments(current => current.map(item => item.id === comment.id ? { ...item, replyStatus: status, replyAttempt: attempt ?? null, replyMessage: message ?? null, needsReply: false } : item))} />}
     {!loading && !error && !comments.length && <p className="workspace-post-note">No saved comments on this post yet.</p>}
-    {loading && <p className="workspace-post-note" role="status">Loading comments…</p>}
+    {loading && !comments.length && <p className="workspace-post-note" role="status">Loading comments…</p>}
     {error && <Alert variant="destructive"><AlertDescription>{error} <Button variant="outline" onClick={() => { void load(retryCursor.current); }}>Retry</Button></AlertDescription></Alert>}
     {cursor && !error && <Button className="workspace-load-more" variant="outline" disabled={loading} onClick={() => { void load(cursor); }}>Load more comments</Button>}
   </div>;
 }
 
-function PostRow({ post, accounts }: { post: SavedPost; accounts: Account[] }) {
+function PostRow({ post, accounts, liveRefresh }: { post: SavedPost; accounts: Account[]; liveRefresh: number }) {
   const [open, setOpen] = useState(false), [visited, setVisited] = useState(false);
   const id = `post-comments-${post.accountId}-${post.id}`;
   const toggle = () => { setOpen(current => !current); setVisited(true); };
@@ -268,34 +283,37 @@ function PostRow({ post, accounts }: { post: SavedPost; accounts: Account[] }) {
     <TableCell data-label="Account"><span className="workspace-post-account"><HugeiconsIcon icon={post.platform === 'instagram' ? InstagramIcon : YoutubeIcon} aria-hidden="true" />{accounts.find(account => account.id === post.accountId)?.username || post.platform}</span></TableCell>
     <TableCell data-label="Date">{post.createdAt ? <time dateTime={post.createdAt}>{new Date(post.createdAt).toLocaleDateString()}</time> : 'Date unavailable'}</TableCell>
     <TableCell data-label="Status"><div className="workspace-statuses"><span>{post.commentCount} comments</span>{post.hiddenCount > 0 && <Badge className="workspace-status-hidden">{post.hiddenCount} hidden</Badge>}{post.needsReplyCount > 0 && <Badge className="workspace-status-draft">{post.needsReplyCount} need reply</Badge>}</div></TableCell>
-  </TableRow><TableRow id={id} hidden={!open} className="workspace-post-detail"><TableCell colSpan={4}>{visited && <PostComments post={post} />}</TableCell></TableRow></>;
+  </TableRow><TableRow id={id} hidden={!open} className="workspace-post-detail"><TableCell colSpan={4}>{visited && <PostComments post={post} open={open} liveRefresh={liveRefresh} />}</TableCell></TableRow></>;
 }
 
-function PostsTable({ sort, filter, accounts, refresh }: { sort: string; filter: string; accounts: Account[]; refresh: number }) {
+function PostsTable({ sort, filter, accounts, refresh, liveRefresh }: { sort: string; filter: string; accounts: Account[]; refresh: number; liveRefresh: number }) {
   const [posts, setPosts] = useState<SavedPost[]>([]), [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true), [error, setError] = useState('');
   const requestId = useRef(0);
   const retryCursor = useRef<string | undefined>(undefined);
-  async function load(before?: string) {
+  const busy = useRef(false), again = useRef(false), count = useRef(0), firstLive = useRef(true);
+  async function load(before?: string, background = false) {
+    if (background && busy.current) { again.current = true; return; }
+    busy.current = true;
     const request = ++requestId.current; setLoading(true); setError('');
     retryCursor.current = before;
     try {
-      const response = await fetch(`/api/posts?${new URLSearchParams({ sort, view: filter || 'all', ...(before ? { before } : {}) })}`);
-      if (!response.ok) throw new Error();
-      const page = await response.json() as { posts: SavedPost[]; nextCursor: string | null };
+      const page = await loadWindow<SavedPost>(`/api/posts?${new URLSearchParams({ sort, view: filter || 'all', ...(before ? { before } : {}) })}`, 'posts', background ? count.current : 0);
       if (request !== requestId.current) return;
-      setPosts(current => before ? [...current, ...page.posts] : page.posts); setCursor(page.nextCursor);
+      count.current = before ? count.current + page.rows.length : page.rows.length;
+      setPosts(current => before ? [...current, ...page.rows] : page.rows); setCursor(page.nextCursor);
     } catch { if (request === requestId.current) setError('Could not load posts.'); }
-    finally { if (request === requestId.current) setLoading(false); }
+    finally { if (request === requestId.current) { busy.current = false; setLoading(false); if (again.current) { again.current = false; void load(undefined, true); } } }
   }
-  useEffect(() => { setPosts([]); setCursor(null); void load(); return () => { requestId.current++; }; }, [sort, filter, refresh]);
+  useEffect(() => { setPosts([]); count.current = 0; again.current = false; setCursor(null); void load(); return () => { requestId.current++; }; }, [sort, filter, refresh]);
+  useEffect(() => { if (firstLive.current) { firstLive.current = false; return; } void load(undefined, true); }, [liveRefresh]);
   return <>
-    {posts.length > 0 && <Card className="workspace-inbox"><CardContent className="workspace-inbox-content"><Table className="workspace-comment-table workspace-post-list" aria-label="Posts">
+    {posts.length > 0 && <Card className="workspace-inbox"><CardContent className="workspace-inbox-content"><Table className="workspace-comment-table workspace-post-list" aria-label="Posts" data-live-blocked={loading}>
       <TableHeader><TableRow><TableHead scope="col">Post</TableHead><TableHead scope="col">Account</TableHead><TableHead scope="col">Date</TableHead><TableHead scope="col">Status</TableHead></TableRow></TableHeader>
-      <TableBody>{posts.map(post => <PostRow key={JSON.stringify([post.accountId, post.id])} post={post} accounts={accounts} />)}</TableBody>
+      <TableBody>{posts.map(post => <PostRow key={JSON.stringify([post.accountId, post.id])} post={post} accounts={accounts} liveRefresh={liveRefresh} />)}</TableBody>
     </Table></CardContent></Card>}
     {!loading && !error && !posts.length && <Empty className="workspace-empty-note"><EmptyHeader><EmptyTitle>{filter ? 'No matching posts' : 'No posts yet'}</EmptyTitle><EmptyDescription>{filter ? 'No posts have comments matching these statuses.' : 'Monitored posts will appear here as they are discovered.'}</EmptyDescription></EmptyHeader></Empty>}
-    {loading && <div className="workspace-loading" role="status" aria-label="Loading posts"><Skeleton className="h-28 w-full" /></div>}
+    {loading && !posts.length && <div className="workspace-loading" role="status" aria-label="Loading posts"><Skeleton className="h-28 w-full" /></div>}
     {error && <Alert variant="destructive"><AlertDescription>{error} <Button variant="outline" onClick={() => { void load(retryCursor.current); }}>Retry</Button></AlertDescription></Alert>}
     {cursor && !error && <Button className="workspace-load-more" variant="outline" disabled={loading} onClick={() => { void load(cursor); }}>Load more posts</Button>}
   </>;
@@ -303,6 +321,7 @@ function PostsTable({ sort, filter, accounts, refresh }: { sort: string; filter:
 
 export function Workspace() {
   const [postsRefresh, setPostsRefresh] = useState(0);
+  const [liveRefresh, setLiveRefresh] = useState(0);
   const [activeTab, setActiveTab] = useState(() => workspaceTab(location.pathname));
   const [filter, setFilter] = useState<('hidden' | 'replies')[]>([]);
   const [commentSort, setCommentSort] = useState<'newest' | 'oldest'>('newest');
@@ -318,6 +337,20 @@ export function Workspace() {
   const [commentsLoading, setCommentsLoading] = useState(true);
   const [commentsError, setCommentsError] = useState('');
   const requestId = useRef(0);
+  const commentsBusy = useRef(false);
+  const connectionRequest = useRef(0), backfillRequest = useRef(0);
+  const refreshLive = useRef<() => Promise<void>>(async () => {});
+  refreshLive.current = async () => {
+    if (activeTab === 'comments') await loadComments(undefined, true);
+    if (activeTab === 'posts') setLiveRefresh(current => current + 1);
+    await loadBackfill(true);
+    if (activeTab === 'settings') await loadConnection(true);
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    return subscribeWorkspace(() => refreshLive.current(), () => !!document.querySelector('[data-live-blocked="true"], .workspace-loading'));
+  }, [user?.id]);
 
   useEffect(() => {
     const onPopState = () => setActiveTab(workspaceTab(location.pathname));
@@ -333,54 +366,73 @@ export function Workspace() {
       }
       if (!response.ok) throw new Error('Unable to load session');
        setUser(await response.json() as SignedInUser);
-      try {
-        const accounts = await fetch('/api/zernio');
-        if (!accounts.ok) throw new Error();
-        setConnection(await accounts.json() as Connection);
-      } catch {
-        setConnection({ connected: false, accounts: [] });
-        setConnectionError('Could not load your Zernio connection. Try again or reconnect Zernio.');
-      }
+      await loadConnection();
     }).catch(() => setError(true));
   }, []);
 
-  useEffect(() => { if (user && activeTab === 'comments') { setComments([]); setNextCursor(null); void loadComments(); } else { requestId.current++; setCommentsLoading(false); } }, [user, activeTab, filter, commentSort]);
+  useEffect(() => {
+    if (user && activeTab === 'comments') { setComments([]); setNextCursor(null); void loadComments(); }
+    else { requestId.current++; commentsBusy.current = false; setCommentsLoading(false); }
+    return () => { requestId.current++; };
+  }, [user, activeTab, filter, commentSort]);
   useEffect(() => {
     if (!connection?.connected) return;
     void loadBackfill();
-    const interval = setInterval(() => { void loadBackfill(); }, 15_000);
-    return () => clearInterval(interval);
   }, [connection?.connected]);
+  useEffect(() => { if (user && activeTab === 'settings') void loadConnection(); }, [user?.id, activeTab]);
 
-  async function loadBackfill() {
+  async function loadConnection(background = false) {
+    const request = ++connectionRequest.current;
     try {
-      const response = await fetch('/api/backfill');
-      if (!response.ok) throw new Error();
-      setBackfill((await response.json() as { accounts: BackfillProgress[] }).accounts);
-      setBackfillError(false);
-    } catch { setBackfillError(true); }
+      const response = await fetch('/api/zernio');
+      if (response.status === 401) { location.replace('/'); return; }
+      if (!response.ok) throw new Error('Connection refresh failed');
+      const value = await response.json() as Connection;
+      if (request !== connectionRequest.current) return;
+      setConnection(value); setConnectionError('');
+    } catch (failure) {
+      if (request !== connectionRequest.current) return;
+      if (!background) setConnection(current => current ?? { connected: false, accounts: [] });
+      setConnectionError('Could not load your Zernio connection. Try again or reconnect Zernio.');
+      if (background) throw failure;
+    }
   }
 
-  async function loadComments(cursor?: string) {
+  async function loadBackfill(background = false) {
+    const request = ++backfillRequest.current;
+    try {
+      const response = await fetch('/api/backfill');
+      if (response.status === 401) { location.replace('/'); return; }
+      if (!response.ok) throw new Error();
+      const value = (await response.json() as { accounts: BackfillProgress[] }).accounts;
+      if (request !== backfillRequest.current) return;
+      setBackfill(value);
+      setBackfillError(false);
+    } catch (failure) { if (request === backfillRequest.current) setBackfillError(true); if (background) throw failure; }
+  }
+
+  async function loadComments(cursor?: string, background = false) {
+    if (background && commentsBusy.current) throw new Error('Comment refresh already in progress');
     const request = ++requestId.current;
+    commentsBusy.current = true;
     setCommentsLoading(true);
     setCommentsError('');
     try {
-      const response = await fetch(`/api/comments?${new URLSearchParams({ view: filter.length ? filter.join(',') : 'all', sort: commentSort, ...(cursor ? { before: cursor } : {}) })}`);
-      if (!response.ok) throw new Error('Could not load saved comments');
-      const page = await response.json() as { comments: SavedComment[]; nextCursor: string | null };
+      const page = await loadWindow<SavedComment>(`/api/comments?${new URLSearchParams({ view: filter.length ? filter.join(',') : 'all', sort: commentSort, ...(cursor ? { before: cursor } : {}) })}`, 'comments', background ? comments.length : 0);
       if (request !== requestId.current) return;
-      setComments((current) => cursor ? [...current, ...page.comments] : page.comments);
+      setComments((current) => cursor ? [...current, ...page.rows] : page.rows);
       setNextCursor(page.nextCursor);
-    } catch { if (request === requestId.current) setCommentsError('Could not load comments. Try again.'); }
-    finally { if (request === requestId.current) setCommentsLoading(false); }
+    } catch (failure) { if (request === requestId.current) setCommentsError('Could not load comments. Try again.'); if (background) throw failure; }
+    finally { if (request === requestId.current) { commentsBusy.current = false; setCommentsLoading(false); } }
   }
 
   async function disconnect() {
+    connectionRequest.current++;
     setConnectionError('');
     try {
       const response = await fetch('/api/zernio/disconnect', { method: 'POST' });
       if (!response.ok) throw new Error('Could not disconnect Zernio');
+      connectionRequest.current++;
       setConnection({ connected: false, accounts: [] });
     } catch { setConnectionError('Could not disconnect Zernio. Try again.'); }
   }
@@ -397,7 +449,7 @@ export function Workspace() {
           </TabsList>
           {user && <AccountMenu user={user} />}
        </header>
-       <main className="workspace-main">
+       <main className="workspace-main" data-live-blocked={activeTab === 'comments' && commentsLoading}>
          {error ? <Alert variant="destructive"><AlertDescription>We couldn't load your workspace. Refresh the page to try again.</AlertDescription></Alert> :
              <>
              {activeTab !== 'settings' && <TabsContent value={activeTab}>
@@ -413,11 +465,11 @@ export function Workspace() {
                    </DropdownMenu>
                     <Button variant="outline" type="button" disabled={activeTab === 'comments' && commentsLoading} onClick={() => { if (activeTab === 'posts') setPostsRefresh(current => current + 1); else void loadComments(); }}><HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" aria-hidden="true" />Refresh</Button></div>
               </div>
-               {activeTab === 'posts' && user && <PostsTable sort={postSort} filter={filter.join(',')} accounts={connection?.accounts || []} refresh={postsRefresh} />}
+                {activeTab === 'posts' && user && <PostsTable sort={postSort} filter={filter.join(',')} accounts={connection?.accounts || []} refresh={postsRefresh} liveRefresh={liveRefresh} />}
                {activeTab === 'comments' && <>
                {comments.length > 0 && <Card className="workspace-inbox"><CardContent className="workspace-inbox-content"><CommentsTable comments={comments} onRefresh={() => { void loadComments(); }} repliesFilter={filter.includes('replies')} hiddenOnly={filter.length === 1 && filter[0] === 'hidden'} onSent={(comment, status, attempt, message) => setComments(current => filter.includes('replies') && status === 'sent' ? current.filter(item => item.accountId !== comment.accountId || item.id !== comment.id) : current.map(item => item.accountId === comment.accountId && item.id === comment.id ? { ...item, replyStatus: status, replyAttempt: attempt ?? null, replyMessage: message ?? null, needsReply: false } : item))} /></CardContent></Card>}
                   {connection && !commentsLoading && !commentsError && comments.length === 0 && <Empty className="workspace-empty-note"><EmptyHeader><EmptyTitle><h2>{filter.length === 1 && filter[0] === 'hidden' ? 'No hidden comments' : filter.length === 1 && filter[0] === 'replies' ? 'No replies to review' : filter.length ? 'No matching comments' : 'No comments yet'}</h2></EmptyTitle><EmptyDescription>{filter.length ? filter.length > 1 ? 'No comments match the selected statuses.' : filter[0] === 'hidden' ? 'Hidden comments will appear here when available.' : 'Comments selected for a reply will appear here.' : connection.connected ? 'We’re scanning recent posts. New comments can take up to 10 minutes to appear.' : connectionError ? 'Check your Zernio connection and try again.' : 'Connect Zernio to start seeing your comments.'}</EmptyDescription></EmptyHeader></Empty>}
-              {commentsLoading && <div className="workspace-loading" role="status" aria-label="Loading comments"><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /></div>}
+               {commentsLoading && !comments.length && <div className="workspace-loading" role="status" aria-label="Loading comments"><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /></div>}
               {commentsError && <Alert variant="destructive"><AlertDescription>{commentsError} <Button variant="outline" type="button" onClick={() => loadComments(nextCursor || undefined)}>Retry</Button></AlertDescription></Alert>}
                 {nextCursor && !commentsError && <Button className="workspace-load-more" variant="outline" type="button" disabled={commentsLoading} onClick={() => loadComments(nextCursor)}>Load more</Button>}
                </>}
@@ -427,6 +479,9 @@ export function Workspace() {
                 {user && connection ? <Card id="accounts" className="workspace-next">
                 <CardHeader><CardTitle><h2>{connection.connected ? 'Your accounts' : 'Connect Zernio'}</h2></CardTitle><CardDescription>{connection.connected ? 'We monitor new posts published after your accounts are connected. We also scan the three most recent posts from before you connected them. Comments are kept for 365 days.' : 'Sign in as your Zernio team owner to connect your accounts.'}</CardDescription></CardHeader>
                   <CardContent>
+                    {connection.connected && connection.webhook?.status === 'reconnect' && <Alert><AlertDescription>Approve Zernio permissions to enable live updates. Periodic syncing still works. <a href="/api/zernio/connect">Review Zernio permissions</a>. The bundled permission also covers contacts, sequences and automations.</AlertDescription></Alert>}
+                    {connection.connected && connection.webhook && connection.webhook.status !== 'reconnect' && <p role="status">{connection.webhook.status === 'active' ? 'Live updates connected. Delivery timing depends on Instagram and YouTube.' : connection.webhook.status === 'disabled' ? 'Live updates are paused. Periodic syncing continues.' : 'Live updates are being set up in the background. Periodic syncing continues while setup retries automatically.'}</p>}
+                    {!connection.connected && !connectionError && <p>Zernio will ask for automation access to manage live updates. This bundled permission also covers contacts and sequences.</p>}
                     {connection.connected ? connection.accounts.length ? <ul className="workspace-accounts">{connection.accounts.map((account) => <li key={account.id}>
                     <Avatar size="lg"><AvatarImage src={account.profilePicture || undefined} alt={`${account.username} profile picture`} referrerPolicy="no-referrer" /><AvatarFallback><HugeiconsIcon icon={account.platform === 'instagram' ? InstagramIcon : YoutubeIcon} aria-hidden="true" /></AvatarFallback></Avatar>
                       <span><strong>{account.username}</strong><small>{account.platform}</small></span>
