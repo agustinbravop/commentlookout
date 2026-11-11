@@ -207,7 +207,7 @@ function CommentsTable({ comments, showPost = true, onRefresh, onSent, repliesFi
       const parent = comment.parentId ? byId.get(`${comment.accountId}:${comment.parentId}`) : undefined;
       const toggle = () => setExpanded(current => current === key ? null : key);
       return <Fragment key={key}><TableRow className="workspace-comment-row" tabIndex={0} aria-label={`Comment by ${comment.author}`} aria-expanded={open} aria-controls={`comment-details-${comment.accountId}-${comment.id}`} onClick={toggle} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); } }}>
-        <TableCell className="workspace-comment-body" data-label="Comment"><div className={depth ? 'workspace-thread-comment' : undefined} style={depth ? { marginInlineStart: `${Math.min(depth, 4) * 16}px` } : undefined}>
+        <TableCell className="workspace-comment-body" data-label="Comment"><div className={depth ? 'workspace-thread-comment' : !showPost ? 'workspace-nested-comment' : undefined} style={depth ? { marginInlineStart: `${Math.min(depth, 4) * 16}px` } : undefined}>
           <div className="workspace-comment-author"><strong>{comment.author}</strong>{comment.parentId && <small className="workspace-reply-label">Reply{parent?.postId === comment.postId ? ` to ${parent.author}` : ''}</small>}</div>
           <p className={open ? 'workspace-comment-full' : 'workspace-truncate'}>{comment.message}</p></div></TableCell>
         {showPost && <TableCell className="workspace-post-cell" data-label="Post"><div className="workspace-post"><span className="workspace-thumbnail">{comment.postPicture && <img src={comment.postPicture} alt="" loading="lazy" referrerPolicy="no-referrer" onError={event => { event.currentTarget.style.display = 'none'; }} />}</span><p className="workspace-truncate">{postLabel(comment.platform, comment.postContent)}</p></div></TableCell>}
@@ -266,7 +266,7 @@ function PostRow({ post, accounts }: { post: SavedPost; accounts: Account[] }) {
     <TableCell data-label="Post"><div className="workspace-post"><span className="workspace-thumbnail">{post.picture && <img src={post.picture} alt="" loading="lazy" referrerPolicy="no-referrer" onError={event => { event.currentTarget.style.display = 'none'; }} />}</span><p className="workspace-truncate">{postLabel(post.platform, post.content)}</p></div></TableCell>
     <TableCell data-label="Account"><span className="workspace-post-account"><HugeiconsIcon icon={post.platform === 'instagram' ? InstagramIcon : YoutubeIcon} aria-hidden="true" />{accounts.find(account => account.id === post.accountId)?.username || post.platform}</span></TableCell>
     <TableCell data-label="Date">{post.createdAt ? <time dateTime={post.createdAt}>{new Date(post.createdAt).toLocaleDateString()}</time> : 'Date unavailable'}</TableCell>
-    <TableCell data-label="Comments"><div className="workspace-statuses"><span>{post.commentCount} comments</span>{post.hiddenCount > 0 && <Badge className="workspace-status-hidden">{post.hiddenCount} hidden</Badge>}{post.needsReplyCount > 0 && <Badge className="workspace-status-draft">{post.needsReplyCount} need reply</Badge>}</div></TableCell>
+    <TableCell data-label="Comment status"><div className="workspace-statuses"><span>{post.commentCount} comments</span>{post.hiddenCount > 0 && <Badge className="workspace-status-hidden">{post.hiddenCount} hidden</Badge>}{post.needsReplyCount > 0 && <Badge className="workspace-status-draft">{post.needsReplyCount} need reply</Badge>}</div></TableCell>
   </TableRow><TableRow id={id} hidden={!open} className="workspace-post-detail"><TableCell colSpan={4}>{visited && <PostComments post={post} />}</TableCell></TableRow></>;
 }
 
@@ -290,7 +290,7 @@ function PostsTable({ sort, filter, accounts, refresh }: { sort: string; filter:
   useEffect(() => { setPosts([]); setCursor(null); void load(); return () => { requestId.current++; }; }, [sort, filter, refresh]);
   return <>
     {posts.length > 0 && <Card className="workspace-inbox"><CardContent className="workspace-inbox-content"><Table className="workspace-comment-table workspace-post-list" aria-label="Posts">
-      <TableHeader><TableRow><TableHead scope="col">Post</TableHead><TableHead scope="col">Account</TableHead><TableHead scope="col">Date</TableHead><TableHead scope="col">Comments</TableHead></TableRow></TableHeader>
+      <TableHeader><TableRow><TableHead scope="col">Post</TableHead><TableHead scope="col">Account</TableHead><TableHead scope="col">Date</TableHead><TableHead scope="col">Comment status</TableHead></TableRow></TableHeader>
       <TableBody>{posts.map(post => <PostRow key={JSON.stringify([post.accountId, post.id])} post={post} accounts={accounts} />)}</TableBody>
     </Table></CardContent></Card>}
     {!loading && !error && !posts.length && <Empty className="workspace-empty-note"><EmptyHeader><EmptyTitle>{filter ? 'No matching posts' : 'No posts yet'}</EmptyTitle><EmptyDescription>{filter ? 'No posts have comments matching these statuses.' : 'Monitored posts will appear here as they are discovered.'}</EmptyDescription></EmptyHeader></Empty>}

@@ -90,8 +90,10 @@
 .workspace-comment-table .workspace-comment-row[aria-expanded="true"] { background: transparent; border-bottom: 0; }
 .workspace-comment-full { max-width: 75ch; white-space: pre-wrap; line-height: 1.55; }
 .workspace-comment-body p { margin: 3px 0 0; }
-.workspace-thread-comment { position: relative; padding-inline-start: 14px; }
-.workspace-thread-comment::before { content: ''; position: absolute; inset-inline-start: 0; top: 4px; width: 8px; height: 16px; border-inline-start: 1px solid var(--border); border-bottom: 1px solid var(--border); border-end-start-radius: 7px; pointer-events: none; }
+.workspace-nested-comment, .workspace-thread-comment { position: relative; }
+.workspace-thread-comment { padding-inline-start: 16px; }
+.workspace-nested-comment::before, .workspace-thread-comment::before { content: ''; position: absolute; inset-inline-start: -20px; top: 2px; width: 10px; height: 14px; border-inline-start: 1px solid var(--muted-foreground); border-bottom: 1px solid var(--muted-foreground); border-end-start-radius: 6px; pointer-events: none; }
+.workspace-thread-comment::before { inset-inline-start: 0; }
 .workspace-comment-author { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }
 .workspace-reply-label { color: var(--muted-foreground); font-size: 12px; }
 .workspace-comment-body > div > p { white-space: pre-wrap; line-height: 1.55; }
@@ -109,9 +111,8 @@
 .workspace-post-account { display: flex; align-items: center; gap: 6px; }
 .workspace-post-account svg { width: 16px; height: 16px; flex: none; }
 .workspace-post-list .workspace-post-detail[hidden] { display: none; }
-.workspace-post-list > tbody > .workspace-post-detail > td { padding: 0 0 20px 44px; }
+.workspace-post-list > tbody > .workspace-post-detail > td { padding: 0 0 0 44px; }
 .workspace-post-comments { position: relative; min-width: 0; padding-inline-start: 12px; }
-.workspace-post-comments::before { content: ''; position: absolute; inset-inline-start: 0; top: 4px; height: 16px; width: 8px; border-inline-start: 1px solid var(--border); border-bottom: 1px solid var(--border); border-end-start-radius: 7px; pointer-events: none; }
 .workspace-comment-date-column { width: 105px; }
 .workspace-comment-status-column { width: 220px; }
 .workspace-post-note { padding: 16px 10px; color: var(--muted-foreground); }
@@ -151,13 +152,13 @@
 @media (max-width: 700px) { .workspace-header { padding-block: 3px; } }
 @media (max-width: 420px) { .workspace-header .brand-lockup { font-size: 17px; }.workspace-header .brand-icon { width: 29px; height: 29px; }.workspace-heading-actions { width: 100%; } }
 @media (max-width: 700px) {
-  .workspace-post-list > tbody > .workspace-post-detail { display: block; padding: 0; }
-  .workspace-post-list > tbody > .workspace-post-detail[hidden] { display: none; }
-  .workspace-post-list > tbody > .workspace-post-detail > td { display: block; width: 100%; padding: 0 0 12px 12px; }
-  .workspace-post-list > tbody > .workspace-post-detail > td::before { display: none; }
+  .workspace-post-list > tbody > tr.workspace-post-detail { display: block; padding: 0; }
+  .workspace-post-list > tbody > tr.workspace-post-detail[hidden] { display: none; }
+  .workspace-post-list > tbody > tr.workspace-post-detail > td { display: block; width: 100%; padding: 0 0 0 12px; }
+  .workspace-post-list > tbody > tr.workspace-post-detail > td::before { display: none; }
   .workspace-post-comments { padding-inline-start: 10px; }
   .workspace-post-row > td:first-child { grid-column: 1 / -1; }
-  .workspace-post-list > tbody > .workspace-post-row { padding-block: 20px; gap: 12px; }
-  .workspace-post-list > tbody > .workspace-post-row > td { padding-block: 0; }
-  .workspace-post-list > tbody > .workspace-post-row > td:last-child { grid-column: 1 / -1; }
+  .workspace-post-list > tbody > tr.workspace-post-row { padding-block: 20px; gap: 12px; }
+  .workspace-post-list > tbody > tr.workspace-post-row > td { padding-block: 0; }
+  .workspace-post-list > tbody > tr.workspace-post-row > td:last-child { grid-column: 1 / -1; }
 }
