@@ -72,6 +72,54 @@ test('sync persists future posts before thread reads, retries failures, and isol
   } finally { globalThis.fetch = originalFetch; log.mockRestore(); }
 });
 
+test('recovery polling rereads completed older threads without webhooks and keeps failed reads pending', async () => {
+  const alice = connect('recovery-alice', 'recovery-owner');
+  const bob = createSession('recovery-bob', 'recovery-bob@example.com', 'Bob');
+  const account = '121212121212121212121212';
+  const old = new Date(Date.now() - 86400_000).toISOString();
+  const now = new Date().toISOString();
+  for (const user of [alice.user, bob.user]) {
+    db.prepare('INSERT INTO monitored_accounts VALUES (?, ?, ?, ?)').run(user.id, account, 'instagram', now);
+    db.prepare('INSERT INTO backfill_accounts VALUES (?, ?, 1)').run(user.id, account);
+    db.prepare('INSERT INTO monitored_posts (user_id,account_id,post_id,pending,picture,created_at) VALUES (?, ?, ?, 0, ?, ?)')
+      .run(user.id, account, 'older-post', 'https://images.example.com/post.jpg', old);
+    db.prepare('INSERT INTO backfill_posts VALUES (?, ?, ?, 0, ?, ?)').run(user.id, account, 'older-post', old, old);
+  }
+  let fail = true;
+  let reads = 0;
+  const original = globalThis.fetch;
+  const log = spyOn(console, 'error').mockImplementation(() => {});
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/users')) return Response.json({ currentUserId: 'recovery-owner', users: [{ _id: 'recovery-owner', role: 'owner' }] });
+    if (url.pathname.endsWith('/accounts')) return Response.json({ accounts: [{ _id: account, platform: 'instagram' }] });
+    if (url.pathname.endsWith('/inbox/comments')) return Response.json({ data: [], pagination: { hasMore: false } });
+    if (url.pathname.endsWith('/inbox/comments/older-post')) {
+      reads++;
+      if (fail) return Response.json({}, { status: 503 });
+      return Response.json({ comments: [
+        { id: 'new-visitor', message: 'New question', createdTime: now },
+        { id: 'owner', message: 'Owner comment', createdTime: now, from: { isOwner: true } },
+      ], pagination: { hasMore: false } });
+    }
+    throw new Error('Unexpected request');
+  }) as typeof fetch;
+  try {
+    await syncComments();
+    expect(db.prepare('SELECT pending FROM monitored_posts WHERE user_id = ?').get(alice.user.id)).toEqual({ pending: 1 });
+    fail = false;
+    await syncComments();
+    await syncComments();
+    expect(reads).toBe(3);
+    expect(db.prepare('SELECT pending FROM monitored_posts WHERE user_id = ?').get(alice.user.id)).toEqual({ pending: 0 });
+    expect(db.prepare('SELECT comment_id FROM synced_comments WHERE user_id = ?').all(alice.user.id)).toEqual([{ comment_id: 'new-visitor' }]);
+    expect(db.prepare('SELECT * FROM backfill_comments WHERE user_id = ?').all(alice.user.id)).toEqual([]);
+    expect(db.prepare('SELECT pending FROM monitored_posts WHERE user_id = ?').get(bob.user.id)).toEqual({ pending: 0 });
+    expect(db.prepare('SELECT * FROM synced_comments WHERE user_id = ?').all(bob.user.id)).toEqual([]);
+    expect(db.prepare('SELECT completed_at FROM backfill_posts WHERE user_id = ?').get(alice.user.id)).toEqual({ completed_at: old });
+  } finally { globalThis.fetch = original; log.mockRestore(); }
+});
+
 test('saved inbox pages newest-first without duplicates', async () => {
   const { token, user } = createSession('paged-inbox', 'paged-inbox@example.com', 'Paged');
   const account = '222222222222222222222222';

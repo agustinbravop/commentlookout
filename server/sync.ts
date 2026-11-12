@@ -207,7 +207,14 @@ export async function syncComments() {
             (SELECT id FROM webhook_bindings WHERE user_id = ? AND owner_id = ?)
             AND (status = 'disconnected' OR binding_id IN (SELECT id FROM webhook_bindings WHERE enabled = 0))`)
             .run(account._id, connection.user_id, connection.owner_id);
-          try { await syncAccount(connection.user_id, connection.owner_id, token, account); }
+          try {
+            // Recovery must reread known threads even when an older post is absent from the new-post feed.
+            if (connected(connection.user_id, connection.owner_id, account._id)) {
+              db.prepare('UPDATE monitored_posts SET pending = 1 WHERE user_id = ? AND account_id = ?')
+                .run(connection.user_id, account._id);
+            }
+            await syncAccount(connection.user_id, connection.owner_id, token, account);
+          }
           catch (error) { console.error('Zernio comment sync account pending', { platform: account.platform, reason: error instanceof Error ? error.message : 'Unknown error' }); }
         }
         if (page.pagination?.nextCursor === cursor) throw new Error('Invalid account cursor');
